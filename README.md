@@ -101,22 +101,38 @@ $env:DEEPSEEK_API_KEY="your-deepseek-api-key"
   --suite banking `
   --task-id user_task_0 `
   --model deepseek-flash `
-  --sample-count 1 `
   --k 3
 ```
 
-`sample_count=1` keeps the first real run inexpensive. The command writes:
+The Judge samples each escalated call 3 times by default. `--sample-count 1`
+is cheaper but disables Judge disagreement detection, and the script prints a
+warning. The command writes:
 
-- `logs/agentdojo_e2e/<run_id>/policy_decisions.jsonl`
-- `logs/agentdojo_e2e/<run_id>/reviewer_decisions.jsonl`
+- `logs/agentdojo_e2e/<run_id>/policy_decisions.jsonl` (Judge cost per call)
+- `logs/agentdojo_e2e/<run_id>/reviewer_decisions.jsonl` (reviewer cost per review)
+- `logs/agentdojo_e2e/<run_id>/run_summary.json` (utility, attack result, agent token cost)
+
+The total cost of a run is the sum of `estimated_cost_usd` in both JSONL files
+plus `agent_usage.estimated_cost_usd` in the summary.
 
 The task is successful when the script prints `utility=True` and the policy
 logs show tool calls passing through P1, Judge, P6, and the reviewer.
 
-This first end-to-end run temporarily uses DeepSeek for the agent, Judge, and
-reviewer to validate the plumbing. For the final experiments, keep DeepSeek as
-the agent/Judge if desired, but replace the simulated reviewer with a different
-model family to reduce correlated reviewer behavior.
+Other options:
+
+- `--injection-task injection_task_0` runs the task under a prompt-injection
+  attack. `--attack` picks the AgentDojo attack (default
+  `important_instructions_deepseek`, the standard `important_instructions`
+  template addressed to DeepSeek). The script prints `attack_succeeded`, which
+  is `None` when no attack was run.
+- `--q-table configs\q_table.json` loads a q table built by
+  `scripts/build_q_table.py`. Tools missing from the table use `q=1.0`.
+- `--tau0` sets the P6 allocator's base threshold (default `1.0`).
+- `--reviewer-model`, `--reviewer-base-url` and `--reviewer-api-key-env` point
+  the simulated reviewer at a different OpenAI-compatible model. By default the
+  reviewer uses the same DeepSeek model as the agent and Judge, and the script
+  prints a warning. Use a different model family for the final experiments to
+  reduce correlated reviewer behavior.
 
 ### Escalation budget `k`
 
@@ -138,6 +154,10 @@ The executor keeps these values in `extra_args` for the lifetime of the task:
 
 Each `REQUIRE_APPROVAL` consumes one escalation. When the budget reaches zero,
 later `REQUIRE_APPROVAL` decisions are converted to `DENY`.
+
+`expected_remaining_risky_calls` also counts down: each call that P1 cannot
+settle on its own (it reaches P6, or P1 escalates it when no Judge is
+configured) lowers it by one, down to zero.
 
 ### Simulated human reviewer
 
@@ -205,8 +225,8 @@ Real DeepSeek responses automatically record input tokens, output tokens,
 cached input tokens, and estimated USD cost. Pricing is configured in
 `harness/cost.py`; verify the official DeepSeek pricing page before large runs.
 
-When the reviewer flow exists, store its final verdict in the JSONL field
-`reviewer_verdict`. Build the dev q table with:
+The reviewer log stores the final verdict in `reviewer_verdict` and whether the
+review succeeded in `reviewer_success`. Build the dev q table with:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\build_q_table.py `
@@ -216,7 +236,12 @@ When the reviewer flow exists, store its final verdict in the JSONL field
   --output configs\q_table.json
 ```
 
-Then load the JSON into `PolicyEngine(q_table=...)`.
+Records with `reviewer_success: false` are skipped, because a failed review
+defaults to `DENY` and is not a real reviewer judgement. `--baseline-threshold`
+(default `0.5`) must match the allocator's `allow_threshold`.
+
+Then load the JSON with `run_agentdojo_e2e.py --q-table configs\q_table.json`,
+or in code with `PolicyEngine(q_table=load_q_table(path))`.
 
 ## 中文
 
@@ -314,21 +339,35 @@ $env:DEEPSEEK_API_KEY="你的 DeepSeek API Key"
   --suite banking `
   --task-id user_task_0 `
   --model deepseek-flash `
-  --sample-count 1 `
   --k 3
 ```
 
-第一次真实运行使用 `sample_count=1` 可以控制费用。命令会写入：
+Judge 默认对每个升级调用采样 3 次。`--sample-count 1` 更便宜，但会关闭
+Judge 分歧检测，脚本会输出警告。命令会写入：
 
-- `logs/agentdojo_e2e/<run_id>/policy_decisions.jsonl`
-- `logs/agentdojo_e2e/<run_id>/reviewer_decisions.jsonl`
+- `logs/agentdojo_e2e/<run_id>/policy_decisions.jsonl`（每次调用的 Judge 成本）
+- `logs/agentdojo_e2e/<run_id>/reviewer_decisions.jsonl`（每次审核的 reviewer 成本）
+- `logs/agentdojo_e2e/<run_id>/run_summary.json`（utility、攻击结果、agent token 成本）
+
+一次运行的总成本 = 两份 JSONL 中 `estimated_cost_usd` 之和 + summary 中的
+`agent_usage.estimated_cost_usd`。
 
 当脚本输出 `utility=True`，并且日志显示工具调用经过 P1、Judge、P6 和
 reviewer 时，说明端到端链路成功。
 
-这版端到端验证暂时让 agent、Judge 和 reviewer 都使用 DeepSeek，目的是先
-跑通系统。正式实验时，agent/Judge 可以继续使用 DeepSeek，但应把模拟
-reviewer 替换为不同模型家族，以降低 reviewer 与 policy 判断高度相关的问题。
+其他选项：
+
+- `--injection-task injection_task_0`：在 prompt injection 攻击下运行任务。
+  `--attack` 选择 AgentDojo 攻击（默认 `important_instructions_deepseek`，即
+  标准 `important_instructions` 模板，模型名写为 DeepSeek）。脚本输出
+  `attack_succeeded`，未启用攻击时为 `None`。
+- `--q-table configs\q_table.json`：加载 `scripts/build_q_table.py` 生成的
+  q table，表中没有的工具使用 `q=1.0`。
+- `--tau0`：设置 P6 allocator 的基础阈值（默认 `1.0`）。
+- `--reviewer-model`、`--reviewer-base-url`、`--reviewer-api-key-env`：让模拟
+  reviewer 使用另一个兼容 OpenAI API 的模型。默认 reviewer 与 agent/Judge
+  使用同一个 DeepSeek 模型，脚本会输出警告。正式实验应换用不同模型家族，
+  以降低 reviewer 与 policy 判断高度相关的问题。
 
 ### Escalation 预算 `k`
 
@@ -350,6 +389,9 @@ Executor 会把以下状态保存在任务的 `extra_args` 中：
 
 每次 `REQUIRE_APPROVAL` 消耗一次升级额度。额度耗尽后，后续
 `REQUIRE_APPROVAL` 会自动转成 `DENY`。
+
+`expected_remaining_risky_calls` 也会递减：每个 P1 无法单独决定的调用（进入
+P6，或未配置 Judge 时被 P1 升级）都会让它减一，最低为 0。
 
 ### LLM 模拟 human reviewer
 
@@ -415,8 +457,8 @@ logger = DecisionLogger(
 和估算美元成本。价格配置位于 `harness/cost.py`，正式大规模运行前应重新
 核对 DeepSeek 官方价格页。
 
-后续 reviewer 流程完成后，把最终审核结果写入 JSONL 的
-`reviewer_verdict` 字段。然后可以用以下命令生成 dev q table：
+reviewer 日志把最终审核结果写入 `reviewer_verdict`，把审核是否成功写入
+`reviewer_success`。用以下命令生成 dev q table：
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\build_q_table.py `
@@ -426,4 +468,9 @@ logger = DecisionLogger(
   --output configs\q_table.json
 ```
 
-之后通过 `PolicyEngine(q_table=...)` 加载这份 JSON。
+`reviewer_success: false` 的记录会被跳过，因为审核失败时默认 `DENY`，并不是
+reviewer 的真实判断。`--baseline-threshold`（默认 `0.5`）必须与 allocator 的
+`allow_threshold` 一致。
+
+之后用 `run_agentdojo_e2e.py --q-table configs\q_table.json` 加载，或在代码中
+使用 `PolicyEngine(q_table=load_q_table(path))`。

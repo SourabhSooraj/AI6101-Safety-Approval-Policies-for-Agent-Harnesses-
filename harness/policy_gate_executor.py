@@ -14,6 +14,7 @@ from .policy import (
     Decision,
     PolicyHistoryItem,
     PolicyRequest,
+    PolicyResult,
     ToolMetadata,
 )
 from .policy_engine import PolicyEngine
@@ -112,6 +113,8 @@ class PolicyGateToolsExecutor(ToolsExecutor):
                 ),
             )
             policy_result = self.policy_engine.evaluate(policy_request)
+            if self._is_risky_call(policy_result):
+                self._consume_expected_risky_call(extra_args)
 
             effective_decision = policy_result.decision
             review_result: ReviewResult | None = None
@@ -143,6 +146,8 @@ class PolicyGateToolsExecutor(ToolsExecutor):
                                 ),
                                 "reviewer_success": review_result.success,
                                 "reviewer_reason": review_result.reason,
+                                # 覆盖 policy 日志中的 Judge 成本，两份日志相加时不重复计数。
+                                **self._reviewer_usage_fields(review_result),
                             },
                         )
                     effective_decision = review_result.decision
@@ -213,6 +218,38 @@ class PolicyGateToolsExecutor(ToolsExecutor):
         extra_args["remaining_escalations"] = remaining
         extra_args["escalations_used"] = used
         extra_args.setdefault("initial_escalations", remaining)
+
+    @staticmethod
+    def _is_risky_call(policy_result: PolicyResult) -> bool:
+        """P1 无法单独决定的调用：到达 P6，或未配置 Judge 时停在 P1 升级。"""
+
+        if policy_result.stage == "p6":
+            return True
+        return (
+            policy_result.stage == "p1"
+            and policy_result.decision == Decision.REQUIRE_APPROVAL
+        )
+
+    @staticmethod
+    def _consume_expected_risky_call(extra_args: dict[str, Any]) -> None:
+        # 当前调用已在 allocator 中计入，评估之后再递减，最低为 0。
+        remaining = int(extra_args.get("expected_remaining_risky_calls", 0))
+        extra_args["expected_remaining_risky_calls"] = max(0, remaining - 1)
+
+    @staticmethod
+    def _reviewer_usage_fields(review_result: ReviewResult) -> dict[str, Any]:
+        usage = review_result.usage
+        return {
+            "model_name": usage.model if usage is not None else None,
+            "input_tokens": usage.input_tokens if usage is not None else 0,
+            "output_tokens": usage.output_tokens if usage is not None else 0,
+            "cached_input_tokens": (
+                usage.cached_input_tokens if usage is not None else 0
+            ),
+            "estimated_cost_usd": (
+                usage.estimated_cost_usd if usage is not None else 0.0
+            ),
+        }
 
     @staticmethod
     def _consume_escalation(extra_args: dict[str, Any]) -> bool:

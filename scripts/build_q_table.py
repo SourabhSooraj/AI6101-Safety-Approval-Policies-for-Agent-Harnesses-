@@ -7,6 +7,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from harness.budget_allocator import DEFAULT_ALLOW_THRESHOLD
 from harness.q_estimator import estimate_q_table
 
 
@@ -27,6 +28,15 @@ def main() -> None:
         help="Minimum reviewer samples required for a group.",
     )
     parser.add_argument(
+        "--baseline-threshold",
+        type=float,
+        default=DEFAULT_ALLOW_THRESHOLD,
+        help=(
+            "Risk score below which the automatic decision is ALLOW. "
+            "Must match the BudgetAllocator allow_threshold used in the run."
+        ),
+    )
+    parser.add_argument(
         "--output",
         help="Optional JSON output path. Prints to stdout when omitted.",
     )
@@ -35,6 +45,7 @@ def main() -> None:
     q_table = estimate_q_table(
         args.log_path,
         group_by=args.group_by,
+        baseline_threshold=args.baseline_threshold,
         min_samples=args.min_samples,
     )
     serialized = json.dumps(q_table, indent=2, sort_keys=True)

@@ -1,5 +1,8 @@
 from .policy import Decision, PolicyResult
 
+# allocator 自主决定时的放行阈值；q_estimator 用同一个值重建自动决定。
+DEFAULT_ALLOW_THRESHOLD = 0.5
+
 
 class BudgetAllocator:
     """P6 allocator：在风险价值和有限 escalation 预算之间做取舍。"""
@@ -7,7 +10,7 @@ class BudgetAllocator:
     def __init__(
         self,
         tau0: float = 1.0,
-        allow_threshold: float = 0.5,
+        allow_threshold: float = DEFAULT_ALLOW_THRESHOLD,
     ) -> None:
         if tau0 <= 0:
             raise ValueError("tau0 must be positive")

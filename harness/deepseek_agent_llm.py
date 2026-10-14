@@ -11,6 +11,8 @@ from agentdojo.agent_pipeline.llms.openai_llm import (
 from agentdojo.functions_runtime import EmptyEnv, Env, FunctionsRuntime
 from agentdojo.types import ChatMessage
 
+from .cost import TokenUsage, usage_from_openai_response
+
 
 def _message_to_deepseek(message: ChatMessage, model_name: str):
     """DeepSeek Chat Completions 使用 system，而不是 developer role。"""
@@ -55,6 +57,12 @@ def _message_to_deepseek(message: ChatMessage, model_name: str):
 class DeepSeekAgentLLM(OpenAILLM):
     """AgentDojo OpenAILLM 的 DeepSeek 兼容版本。"""
 
+    def __init__(self, *args, cost_period: str = "auto", **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.cost_period = cost_period
+        # 累计 agent 自身的 token 和成本；Judge/reviewer 成本记录在决策日志中。
+        self.total_usage = TokenUsage.zero(self.model)
+
     def query(
         self,
         query: str,
@@ -81,6 +89,11 @@ class DeepSeekAgentLLM(OpenAILLM):
             openai_tools,
             self.reasoning_effort,
             self.temperature,
+        )
+        self.total_usage = self.total_usage + usage_from_openai_response(
+            completion,
+            model=self.model,
+            period=self.cost_period,
         )
         output = _openai_to_assistant_message(completion.choices[0].message)
         return query, runtime, env, [*messages, output], extra_args
