@@ -57,6 +57,7 @@ class PolicyResult:
     decision: Decision
     reason: str
     policy_name: str
+    policy_variant: str = ""
     risk_score: float = 0.0
     impact: int = 1
     q: float = 1.0

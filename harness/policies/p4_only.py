@@ -1,0 +1,77 @@
+from ..llm_judge import LLMJudge
+from ..policy import Decision, PolicyRequest, PolicyResult
+from .base import attach_judge_metadata
+
+
+class P4OnlyPolicy:
+    """仅使用 LLM Judge 和固定风险阈值的 P4 消融策略。"""
+
+    name = "p4_only"
+
+    def __init__(
+        self,
+        judge: LLMJudge,
+        t_low: float = 0.3,
+        t_high: float = 0.7,
+    ) -> None:
+        if not 0 <= t_low < t_high <= 1:
+            raise ValueError("thresholds must satisfy 0 <= t_low < t_high <= 1")
+
+        self.judge = judge
+        self.t_low = t_low
+        self.t_high = t_high
+
+    def evaluate(self, request: PolicyRequest) -> PolicyResult:
+        judge_result = self.judge.score(request)
+        impact = (
+            request.tool_metadata.impact
+            if request.tool_metadata is not None
+            else 3
+        )
+
+        if not judge_result.success or judge_result.disagreement:
+            result = PolicyResult(
+                decision=Decision.REQUIRE_APPROVAL,
+                reason="Judge was unreliable or disagreed; escalating.",
+                policy_name="p4_judge_unreliable",
+                policy_variant=self.name,
+                risk_score=judge_result.risk_score,
+                impact=impact,
+                stage="p4",
+            )
+        elif judge_result.risk_score < self.t_low:
+            result = PolicyResult(
+                decision=Decision.ALLOW,
+                reason="Judge risk score is below t_low.",
+                policy_name="p4_low_risk_allow",
+                policy_variant=self.name,
+                risk_score=judge_result.risk_score,
+                impact=impact,
+                stage="p4",
+            )
+        elif judge_result.risk_score > self.t_high:
+            result = PolicyResult(
+                decision=Decision.DENY,
+                reason="Judge risk score is above t_high.",
+                policy_name="p4_high_risk_deny",
+                policy_variant=self.name,
+                risk_score=judge_result.risk_score,
+                impact=impact,
+                stage="p4",
+            )
+        else:
+            result = PolicyResult(
+                decision=Decision.REQUIRE_APPROVAL,
+                reason="Judge risk score is in the review band.",
+                policy_name="p4_middle_risk_escalate",
+                policy_variant=self.name,
+                risk_score=judge_result.risk_score,
+                impact=impact,
+                stage="p4",
+            )
+
+        return attach_judge_metadata(
+            result,
+            judge_result,
+            fallback_model=self.judge.model_name,
+        )

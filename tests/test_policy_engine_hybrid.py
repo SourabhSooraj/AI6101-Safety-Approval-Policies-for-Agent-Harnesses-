@@ -73,7 +73,7 @@ class PolicyEngineHybridTests(unittest.TestCase):
 
     def test_high_risk_value_escalates(self):
         client = SequenceJudgeClient(
-            ['{"risk_score": 0.9, "reason": "unexpected payment"}']
+            ['{"risk_score": 0.6, "reason": "uncertain payment"}']
         )
         engine = PolicyEngine(
             judge=LLMJudge(client, sample_count=1),
@@ -87,7 +87,7 @@ class PolicyEngineHybridTests(unittest.TestCase):
         self.assertEqual(result.decision, Decision.REQUIRE_APPROVAL)
         self.assertEqual(result.policy_name, "p6_value_above_tau")
         self.assertEqual(result.stage, "p6")
-        self.assertAlmostEqual(result.value, 3.6)
+        self.assertAlmostEqual(result.value, 2.4)
 
     def test_low_risk_value_allows(self):
         client = SequenceJudgeClient(
@@ -103,7 +103,7 @@ class PolicyEngineHybridTests(unittest.TestCase):
         )
 
         self.assertEqual(result.decision, Decision.ALLOW)
-        self.assertEqual(result.policy_name, "p6_allow_below_threshold")
+        self.assertEqual(result.policy_name, "hybrid_low_risk_allow")
 
     def test_judge_disagreement_forces_escalation(self):
         client = SequenceJudgeClient(
@@ -127,9 +127,9 @@ class PolicyEngineHybridTests(unittest.TestCase):
 
     def test_exhausted_budget_denies(self):
         client = SequenceJudgeClient(
-            ['{"risk_score": 0.9, "reason": "unsafe"}']
+            ['{"risk_score": 0.6, "reason": "uncertain"}']
         )
-        # value 3.6 > tau 1.0：本应升级，预算为 0 时拒绝。
+        # risk 0.6 在 Judge 阈值之间；value 2.4 > tau 1.0，本应升级，预算为 0 时拒绝。
         engine = PolicyEngine(
             judge=LLMJudge(client, sample_count=1),
             allocator=BudgetAllocator(tau0=1.0),
@@ -146,9 +146,49 @@ class PolicyEngineHybridTests(unittest.TestCase):
         self.assertEqual(result.decision, Decision.DENY)
         self.assertEqual(result.policy_name, "p6_budget_exhausted")
 
+    def test_low_risk_allows_even_with_zero_budget(self):
+        client = SequenceJudgeClient(
+            ['{"risk_score": 0.1, "reason": "expected payment"}']
+        )
+        engine = PolicyEngine(
+            judge=LLMJudge(client, sample_count=1),
+            allocator=BudgetAllocator(tau0=1.0),
+        )
+
+        result = engine.evaluate(
+            request_for(
+                "send_money",
+                external_metadata(),
+                remaining_escalations=0,
+            )
+        )
+
+        self.assertEqual(result.decision, Decision.ALLOW)
+        self.assertEqual(result.policy_name, "hybrid_low_risk_allow")
+
+    def test_high_risk_denies_even_with_zero_budget(self):
+        client = SequenceJudgeClient(
+            ['{"risk_score": 0.9, "reason": "unsafe"}']
+        )
+        engine = PolicyEngine(
+            judge=LLMJudge(client, sample_count=1),
+            allocator=BudgetAllocator(tau0=1.0),
+        )
+
+        result = engine.evaluate(
+            request_for(
+                "send_money",
+                external_metadata(),
+                remaining_escalations=0,
+            )
+        )
+
+        self.assertEqual(result.decision, Decision.DENY)
+        self.assertEqual(result.policy_name, "hybrid_high_risk_deny")
+
     def test_policy_engine_writes_jsonl_log(self):
         client = SequenceJudgeClient(
-            ['{"risk_score": 0.9, "reason": "unexpected payment"}']
+            ['{"risk_score": 0.6, "reason": "uncertain payment"}']
         )
         with tempfile.TemporaryDirectory() as directory:
             log_path = Path(directory) / "policy.jsonl"
