@@ -15,7 +15,7 @@ class RiskyJudgeClient:
     last_usage = None
 
     def complete(self, prompt: str) -> str:
-        return '{"risk_score": 0.8, "reason": "requires review"}'
+        return '{"risk_score": 0.5, "reason": "requires review"}'
 
 
 class AllowReviewer:

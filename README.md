@@ -13,14 +13,17 @@ returns one of three decisions:
 - `DENY`: block the tool call.
 - `REQUIRE_APPROVAL`: send the call to human review.
 
-The current policy pipeline is:
+The repository contains three controlled policy variants:
 
 ```text
-P1 rulebase
--> DeepSeek LLM Judge for P1 escalations
--> P6 budget allocator
--> ALLOW / DENY / REQUIRE_APPROVAL
+p1_only  -> P1 rules only
+p4_only  -> LLM Judge with fixed thresholds
+hybrid   -> P1 -> LLM Judge -> P6 budget allocator
 ```
+
+All variants use the same Harness, reviewer, escalation budget, AgentDojo
+suites, and logging format. See "Policy variants for controlled comparison"
+below for details.
 
 ### Setup
 
@@ -42,8 +45,8 @@ Then activate the environment again.
 
 ### DeepSeek API key
 
-The real LLM Judge requires a DeepSeek API key. Set it in the current
-PowerShell session:
+The real AgentDojo pipeline and its LLM-backed Agent, Judge, and reviewer
+require a DeepSeek API key. Set it in the current PowerShell session:
 
 ```powershell
 $env:DEEPSEEK_API_KEY="your-deepseek-api-key"
@@ -86,8 +89,8 @@ A successful run prints results with `stage=p6` and, when the call is
 escalated, a `Reviewer result` block. If the script reports
 `p6_force_escalation`, the API request or Judge response parsing failed.
 
-Without a DeepSeek key, tests and P1-only development still work. Only real
-LLM Judge experiments require the key.
+Without a DeepSeek key, unit tests and P1-only development still work. A real
+AgentDojo run with the DeepSeek Agent, Judge, or reviewer requires the key.
 
 ### Real AgentDojo banking end-to-end run
 
@@ -100,6 +103,7 @@ $env:DEEPSEEK_API_KEY="your-deepseek-api-key"
   --benchmark-version v1.2.2 `
   --suite banking `
   --task-id user_task_0 `
+  --policy hybrid `
   --model deepseek-flash `
   --sample-count 1 `
   --k 3
@@ -109,14 +113,62 @@ $env:DEEPSEEK_API_KEY="your-deepseek-api-key"
 
 - `logs/agentdojo_e2e/<run_id>/policy_decisions.jsonl`
 - `logs/agentdojo_e2e/<run_id>/reviewer_decisions.jsonl`
+- `logs/agentdojo_e2e/<run_id>/agentdojo_trace/`
 
 The task is successful when the script prints `utility=True` and the policy
 logs show tool calls passing through P1, Judge, P6, and the reviewer.
+
+DeepSeek agent thinking mode is disabled by default for stable tool-call
+loops. Use `--agent-thinking` to enable it; the adapter then preserves
+`reasoning_content` across all tool-call turns as required by DeepSeek.
+The runner also appends an automated-benchmark instruction telling the agent
+that no human is available for follow-up questions. Use `--no-auto-complete`
+to run with the stock AgentDojo system message only.
 
 This first end-to-end run temporarily uses DeepSeek for the agent, Judge, and
 reviewer to validate the plumbing. For the final experiments, keep DeepSeek as
 the agent/Judge if desired, but replace the simulated reviewer with a different
 model family to reduce correlated reviewer behavior.
+
+### Policy variants for controlled comparison
+
+The runner can evaluate three controlled policy variants:
+
+- `p1_only`: run P1 only. `ALLOW` and `DENY` are final; P1 escalations go
+  directly to the reviewer. No Judge or P6 allocator is used.
+- `p4_only`: run the LLM Judge only. Scores below `t_low` are allowed, scores
+  above `t_high` are denied, and the middle band is escalated. No P1 or P6
+  allocator is used.
+- `hybrid`: the main P1 -> Judge -> P6 policy. Judge scores below `t_low` are
+  allowed, scores above `t_high` are denied, and only the middle band reaches
+  the P6 allocator.
+
+Run one variant with:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_agentdojo_e2e.py `
+  --policy p4_only `
+  --t-low 0.3 `
+  --t-high 0.7 `
+  --suite banking `
+  --task-id user_task_0 `
+  --k 3
+```
+
+Run a small comparison matrix with:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_policy_comparison.py `
+  --policies p1_only p4_only hybrid `
+  --k-values 0 3 `
+  --task-ids user_task_0 `
+  --sample-count 1
+```
+
+The default Judge thresholds are stored in `configs/judge_thresholds.json`. Tune
+them only on dev logs, then freeze them for test. Every JSONL decision record
+includes `policy_variant`, so results from the three variants can be compared
+without mixing files.
 
 ### Escalation budget `k`
 
@@ -205,8 +257,8 @@ Real DeepSeek responses automatically record input tokens, output tokens,
 cached input tokens, and estimated USD cost. Pricing is configured in
 `harness/cost.py`; verify the official DeepSeek pricing page before large runs.
 
-When the reviewer flow exists, store its final verdict in the JSONL field
-`reviewer_verdict`. Build the dev q table with:
+The reviewer writes its final verdict to the JSONL field `reviewer_verdict`.
+Build the dev q table from the reviewer log with:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\build_q_table.py `
@@ -228,14 +280,16 @@ Then load the JSON into `PolicyEngine(q_table=...)`.
 - `DENY`：阻止工具调用。
 - `REQUIRE_APPROVAL`：升级人工审核。
 
-当前 Policy 流程为：
+仓库目前包含三种受控 Policy 变体：
 
 ```text
-P1 rulebase
--> P1 升级的调用进入 DeepSeek LLM Judge
--> P6 预算 allocator
--> ALLOW / DENY / REQUIRE_APPROVAL
+p1_only  -> 只运行 P1 规则
+p4_only  -> LLM Judge 加固定阈值
+hybrid   -> P1 -> LLM Judge -> P6 预算 allocator
 ```
+
+三种变体共用 Harness、reviewer、escalation 预算、AgentDojo suite 和日志
+格式。具体说明见后面的“用于受控对比的 Policy 变体”。
 
 ### 创建环境
 
@@ -257,7 +311,8 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 ### 设置 DeepSeek API Key
 
-真实 LLM Judge 需要 DeepSeek API Key。只对当前终端生效：
+真实 AgentDojo pipeline，以及其中的 LLM Agent、Judge 和 reviewer，需要
+DeepSeek API Key。只对当前终端生效：
 
 ```powershell
 $env:DEEPSEEK_API_KEY="你的 DeepSeek API Key"
@@ -300,8 +355,8 @@ $env:DEEPSEEK_API_KEY="你的 DeepSeek API Key"
 `Reviewer result`。如果出现 `p6_force_escalation`，通常表示 API 请求失败
 或 Judge 返回内容无法解析。
 
-没有 DeepSeek Key 时，仍可运行测试和进行 P1 开发；只有真实 LLM Judge
-实验需要 Key。
+没有 DeepSeek Key 时，仍可运行单元测试和 P1 开发；真实 AgentDojo
+运行中的 DeepSeek Agent、Judge 或 reviewer 需要 Key。
 
 ### 真实 AgentDojo banking 端到端运行
 
@@ -313,6 +368,7 @@ $env:DEEPSEEK_API_KEY="你的 DeepSeek API Key"
   --benchmark-version v1.2.2 `
   --suite banking `
   --task-id user_task_0 `
+  --policy hybrid `
   --model deepseek-flash `
   --sample-count 1 `
   --k 3
@@ -322,13 +378,57 @@ $env:DEEPSEEK_API_KEY="你的 DeepSeek API Key"
 
 - `logs/agentdojo_e2e/<run_id>/policy_decisions.jsonl`
 - `logs/agentdojo_e2e/<run_id>/reviewer_decisions.jsonl`
+- `logs/agentdojo_e2e/<run_id>/agentdojo_trace/`
 
 当脚本输出 `utility=True`，并且日志显示工具调用经过 P1、Judge、P6 和
 reviewer 时，说明端到端链路成功。
 
+为了获得稳定的工具调用循环，DeepSeek agent 的 thinking mode 默认关闭。
+传入 `--agent-thinking` 可以开启；适配器会在所有 tool-call 回合中保留
+DeepSeek 要求的 `reasoning_content`。
+运行脚本还会追加自动化 benchmark 提示，明确没有真人可以追问。传入
+`--no-auto-complete` 可以只使用 AgentDojo 原始 system message。
+
 这版端到端验证暂时让 agent、Judge 和 reviewer 都使用 DeepSeek，目的是先
 跑通系统。正式实验时，agent/Judge 可以继续使用 DeepSeek，但应把模拟
 reviewer 替换为不同模型家族，以降低 reviewer 与 policy 判断高度相关的问题。
+
+### 用于受控对比的 Policy 变体
+
+运行脚本支持三种受控变体：
+
+- `p1_only`：只运行 P1。`ALLOW` 和 `DENY` 直接作为最终结果；P1 升级的
+  调用直接进入 reviewer，不调用 Judge，也不使用 P6 allocator。
+- `p4_only`：只运行 LLM Judge。低于 `t_low` 放行，高于 `t_high` 拒绝，
+  中间区间升级；不使用 P1 和 P6 allocator。
+- `hybrid`：当前主策略 P1 -> Judge -> P6。Judge 分数低于 `t_low` 时直接
+  放行，高于 `t_high` 时直接拒绝，只有中间区间进入 P6 allocator。
+
+运行单个变体：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_agentdojo_e2e.py `
+  --policy p4_only `
+  --t-low 0.3 `
+  --t-high 0.7 `
+  --suite banking `
+  --task-id user_task_0 `
+  --k 3
+```
+
+运行小型对比矩阵：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_policy_comparison.py `
+  --policies p1_only p4_only hybrid `
+  --k-values 0 3 `
+  --task-ids user_task_0 `
+  --sample-count 1
+```
+
+Judge 默认阈值保存在 `configs/judge_thresholds.json`。阈值只能使用 dev logs
+调整，调好后在 test 上冻结。每条 JSONL 决策日志都包含
+`policy_variant`，因此三种变体的结果不会混淆。
 
 ### Escalation 预算 `k`
 
@@ -415,8 +515,8 @@ logger = DecisionLogger(
 和估算美元成本。价格配置位于 `harness/cost.py`，正式大规模运行前应重新
 核对 DeepSeek 官方价格页。
 
-后续 reviewer 流程完成后，把最终审核结果写入 JSONL 的
-`reviewer_verdict` 字段。然后可以用以下命令生成 dev q table：
+reviewer 会把最终审核结果写入 JSONL 的 `reviewer_verdict` 字段。使用
+reviewer 日志生成 dev q table：
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\build_q_table.py `

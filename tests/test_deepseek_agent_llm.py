@@ -1,6 +1,37 @@
 import unittest
+from types import SimpleNamespace
 
-from harness.deepseek_agent_llm import _message_to_deepseek
+from agentdojo.functions_runtime import FunctionsRuntime
+
+from harness.deepseek_agent_llm import (
+    DeepSeekAgentLLM,
+    _message_to_deepseek,
+)
+
+
+class FakeCompletions:
+    def __init__(self):
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content="final answer",
+                        tool_calls=None,
+                        reasoning_content="internal reasoning",
+                    )
+                )
+            ]
+        )
+
+
+class FakeDeepSeekClient:
+    def __init__(self):
+        self.completions = FakeCompletions()
+        self.chat = SimpleNamespace(completions=self.completions)
 
 
 class DeepSeekAgentLLMTests(unittest.TestCase):
@@ -25,6 +56,61 @@ class DeepSeekAgentLLMTests(unittest.TestCase):
 
         self.assertEqual(converted["role"], "user")
         self.assertEqual(converted["content"][0]["text"], "Pay the bill.")
+
+    def test_disables_thinking_by_default(self):
+        client = FakeDeepSeekClient()
+        llm = DeepSeekAgentLLM(client, "deepseek-flash", temperature=0.0)
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "text", "content": "Pay the bill."}],
+            }
+        ]
+
+        _, _, _, output_messages, _ = llm.query(
+            query="Pay the bill.",
+            runtime=FunctionsRuntime({}),
+            messages=messages,
+        )
+
+        request = client.completions.calls[0]
+        self.assertEqual(
+            request["extra_body"],
+            {"thinking": {"type": "disabled"}},
+        )
+        self.assertNotIn("reasoning_effort", request)
+        self.assertEqual(
+            output_messages[-1]["reasoning_content"],
+            "internal reasoning",
+        )
+
+    def test_preserves_reasoning_content_when_thinking_enabled(self):
+        client = FakeDeepSeekClient()
+        llm = DeepSeekAgentLLM(
+            client,
+            "deepseek-flash",
+            thinking=True,
+        )
+        messages = [
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "content": ""}],
+                "reasoning_content": "previous reasoning",
+                "tool_calls": None,
+            }
+        ]
+
+        llm.query(
+            query="continue",
+            runtime=FunctionsRuntime({}),
+            messages=messages,
+        )
+
+        request_message = client.completions.calls[0]["messages"][0]
+        self.assertEqual(
+            request_message["reasoning_content"],
+            "previous reasoning",
+        )
 
 
 if __name__ == "__main__":
