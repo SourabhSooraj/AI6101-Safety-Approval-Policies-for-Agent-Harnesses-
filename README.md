@@ -139,6 +139,17 @@ logs show tool calls passing through P1, Judge, P6, and the reviewer.
 
 Other options:
 
+- `--policy` picks the setup to run (default `full`):
+
+  | Policy | What it does | Budget |
+  |---|---|---|
+  | `full` | P1 -> Judge -> P6 allocator | `--k` |
+  | `allow_all` | No gate: every tool call runs | not used |
+  | `escalate_all` | Read-only calls run; every other call goes to the reviewer, including ones P1 would deny | unlimited |
+  | `p1_only` | P1 only; calls P1 cannot settle go straight to the reviewer, no Judge | `--k` |
+  | `no_budget` | `full` with an unlimited budget, so P6 escalates almost every risky call | unlimited |
+
+  The policy name is written to every log line and to `run_summary.json`.
 - `--injection-task injection_task_0` runs the task under a prompt-injection
   attack. `--attack` picks the AgentDojo attack (default
   `important_instructions_deepseek`, the standard `important_instructions`
@@ -173,6 +184,16 @@ The executor keeps these values in `extra_args` for the lifetime of the task:
 
 Each `REQUIRE_APPROVAL` consumes one escalation. When the budget reaches zero,
 later `REQUIRE_APPROVAL` decisions are converted to `DENY`.
+
+**Team decision: what P6 does when the budget is 0.** P6 makes its normal
+decision and only denies the calls it would have escalated
+(`p6_budget_exhausted`): calls with `value > tau`, and calls where the Judge
+failed or disagreed, so the policy stays fail-closed. Calls that would not have
+been escalated keep the normal rule: `ALLOW` if risk is below the
+`allow_threshold` (0.5), otherwise `DENY`. This follows the brief, which only
+requires denying calls that would otherwise have been escalated. The earlier
+behaviour, denying every call that reached P6 once the budget was 0, made
+nearly every money-moving task fail at `k=0`.
 
 `expected_remaining_risky_calls` also counts down: each call that P1 cannot
 settle on its own (it reaches P6, or P1 escalates it when no Judge is
@@ -256,7 +277,9 @@ review succeeded in `reviewer_success`. Build the dev q table with:
 ```
 
 Records with `reviewer_success: false` are skipped, because a failed review
-defaults to `DENY` and is not a real reviewer judgement. `--baseline-threshold`
+defaults to `DENY` and is not a real reviewer judgement. Records whose `stage`
+is not `p6` (from `p1_only` or `escalate_all` runs) are skipped too, because
+their `risk_score` is a fixed placeholder, not a Judge score. `--baseline-threshold`
 (default `0.5`) must match the allocator's `allow_threshold`.
 
 Then load the JSON with `run_agentdojo_e2e.py --q-table configs\q_table.json`,
@@ -435,6 +458,17 @@ reviewer 时，说明端到端链路成功。
 
 其他选项：
 
+- `--policy` 选择要运行的设置（默认 `full`）：
+
+  | Policy | 作用 | 预算 |
+  |---|---|---|
+  | `full` | P1 -> Judge -> P6 allocator | `--k` |
+  | `allow_all` | 没有 gate：所有工具调用直接执行 | 不使用 |
+  | `escalate_all` | 只读调用直接执行；其余调用全部交给 reviewer，包括 P1 会拒绝的调用 | 无限 |
+  | `p1_only` | 只用 P1；P1 无法决定的调用直接交给 reviewer，不使用 Judge | `--k` |
+  | `no_budget` | 预算无限的 `full`，P6 会把几乎所有风险调用升级 | 无限 |
+
+  policy 名称会写入每一行日志和 `run_summary.json`。
 - `--injection-task injection_task_0`：在 prompt injection 攻击下运行任务。
   `--attack` 选择 AgentDojo 攻击（默认 `important_instructions_deepseek`，即
   标准 `important_instructions` 模板，模型名写为 DeepSeek）。脚本输出
@@ -467,6 +501,13 @@ Executor 会把以下状态保存在任务的 `extra_args` 中：
 
 每次 `REQUIRE_APPROVAL` 消耗一次升级额度。额度耗尽后，后续
 `REQUIRE_APPROVAL` 会自动转成 `DENY`。
+
+**团队决定：预算为 0 时 P6 的行为。** P6 照常决策，只拒绝本应升级的调用
+（`p6_budget_exhausted`）：`value > tau` 的调用，以及 Judge 失败或分歧的调用，
+因此仍然 fail closed。本来不会升级的调用照常处理：风险低于 `allow_threshold`
+（0.5）时 `ALLOW`，否则 `DENY`。这与 brief 的要求一致：只需拒绝本应升级的调用。
+之前的行为是预算为 0 后拒绝所有进入 P6 的调用，导致 `k=0` 时几乎所有涉及转账的
+任务都失败。
 
 `expected_remaining_risky_calls` 也会递减：每个 P1 无法单独决定的调用（进入
 P6，或未配置 Judge 时被 P1 升级）都会让它减一，最低为 0。
@@ -547,7 +588,8 @@ reviewer 日志把最终审核结果写入 `reviewer_verdict`，把审核是否�
 ```
 
 `reviewer_success: false` 的记录会被跳过，因为审核失败时默认 `DENY`，并不是
-reviewer 的真实判断。`--baseline-threshold`（默认 `0.5`）必须与 allocator 的
+reviewer 的真实判断。`stage` 不是 `p6` 的记录（来自 `p1_only` 或 `escalate_all`
+运行）也会被跳过，因为它们的 `risk_score` 是固定占位值，不是 Judge 分数。`--baseline-threshold`（默认 `0.5`）必须与 allocator 的
 `allow_threshold` 一致。
 
 之后用 `run_agentdojo_e2e.py --q-table configs\q_table.json` 加载，或在代码中

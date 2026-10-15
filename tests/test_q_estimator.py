@@ -47,6 +47,21 @@ class QEstimatorTests(unittest.TestCase):
                 "reviewer_success": False,
                 "tool_name": "send_money",
             },
+            # baseline 的固定 risk_score 不是 Judge 分数，不能计入 q。
+            {
+                "decision": "REQUIRE_APPROVAL",
+                "risk_score": 1.0,
+                "reviewer_verdict": "ALLOW",
+                "stage": "baseline",
+                "tool_name": "send_money",
+            },
+            {
+                "decision": "REQUIRE_APPROVAL",
+                "risk_score": 0.75,
+                "reviewer_verdict": "ALLOW",
+                "stage": "p1",
+                "tool_name": "send_money",
+            },
         ]
         self.log_path.write_text(
             "\n".join(json.dumps(record) for record in records) + "\n",
@@ -78,7 +93,7 @@ class QEstimatorTests(unittest.TestCase):
     def test_failed_reviews_are_not_counted(self):
         details = estimate_q_details(self.log_path)
 
-        # 失败记录若被计入，send_money 会变成 3 个样本、2 次改变。
+        # 失败、baseline 或 P1-only 记录若被计入，send_money 的样本数会超过 2。
         self.assertEqual(details["send_money"].sample_count, 2)
         self.assertEqual(details["send_money"].changes, 1)
 

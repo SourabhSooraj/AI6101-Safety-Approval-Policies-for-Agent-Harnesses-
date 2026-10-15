@@ -29,7 +29,7 @@ def estimate_q_table(
     - tool_name: 默认分组字段
 
     reviewer_success 为 false 的记录会被跳过：失败时的 DENY 是 fail-closed
-    默认值，不是 reviewer 的真实判断。
+    默认值，不是 reviewer 的真实判断。stage 不是 p6 的记录也会被跳过。
     """
 
     grouped = _collect_q_estimates(
@@ -103,6 +103,10 @@ def _collect_q_estimates(
             continue
         # 旧日志没有 reviewer_success 字段，缺失时视为成功。
         if record.get("reviewer_success", True) is False:
+            continue
+        # q 衡量 reviewer 改变 P6 自动决定的概率；baseline 或 P1-only 的
+        # risk_score 是固定值，不是 Judge 分数，不能混入。
+        if record.get("stage", "p6") != "p6":
             continue
 
         reviewer_decision = _normalize_reviewer_verdict(

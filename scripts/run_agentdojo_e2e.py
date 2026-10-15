@@ -23,13 +23,17 @@ from agentdojo.attacks import load_attack
 from agentdojo.task_suite.load_suites import get_suite
 
 import harness.attacks  # noqa: F401 - 注册 important_instructions_deepseek
+from harness.baselines import (
+    POLICIES,
+    build_policy_engine,
+    escalation_budget_for,
+)
 from harness.budget_allocator import BudgetAllocator
 from harness.decision_logger import DecisionLogger
 from harness.deepseek_agent_llm import DeepSeekAgentLLM
 from harness.deepseek_judge_client import DeepSeekJudgeClient
 from harness.llm_judge import LLMJudge
 from harness.policy_context import PolicyContextInitializer
-from harness.policy_engine import PolicyEngine
 from harness.policy_gate_executor import PolicyGateToolsExecutor
 from harness.q_estimator import load_q_table
 from harness.simulated_reviewer import SimulatedReviewer
@@ -50,7 +54,23 @@ def main() -> None:
         default=3,
         help="Judge samples per call. Disagreement detection needs at least 2.",
     )
-    parser.add_argument("--k", type=int, default=3)
+    parser.add_argument(
+        "--policy",
+        choices=POLICIES,
+        default="full",
+        help=(
+            "full: P1 -> Judge -> P6. allow_all: no gate. escalate_all: every "
+            "non-read call goes to the reviewer, unlimited budget. p1_only: P1, "
+            "with undecided calls sent to the reviewer. no_budget: full with "
+            "unlimited budget."
+        ),
+    )
+    parser.add_argument(
+        "--k",
+        type=int,
+        default=3,
+        help="Escalation budget per task. Ignored by escalate_all and no_budget.",
+    )
     parser.add_argument(
         "--expected-remaining-risky-calls",
         type=int,
@@ -108,6 +128,8 @@ def main() -> None:
 
     q_table = load_q_table(args.q_table) if args.q_table else {}
     attack_mode = args.attack if args.injection_task else "none"
+    escalation_budget = escalation_budget_for(args.policy, args.k)
+    suite = get_suite(args.benchmark_version, args.suite)
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     log_dir = REPO_ROOT / "logs" / "agentdojo_e2e" / run_id
@@ -116,9 +138,10 @@ def main() -> None:
     summary_path = log_dir / "run_summary.json"
     log_context = {
         "suite": args.suite,
+        "policy": args.policy,
         "attack_mode": attack_mode,
         "injection_task_id": args.injection_task,
-        "k": args.k,
+        "k": escalation_budget,
         "sample_count": args.sample_count,
         "tau0": args.tau0,
         "reviewer_model": reviewer_model,
@@ -137,9 +160,11 @@ def main() -> None:
         ),
         model_name=f"{reviewer_model}-reviewer",
     )
-    policy_engine = PolicyEngine(
+    policy_engine = build_policy_engine(
+        args.policy,
         judge=judge,
         allocator=BudgetAllocator(tau0=args.tau0),
+        tool_names=[function.name for function in suite.tools],
         q_table=q_table,
         decision_logger=DecisionLogger(
             policy_log_path,
@@ -151,7 +176,7 @@ def main() -> None:
         policy_engine=policy_engine,
         tool_metadata=BANKING_TOOL_METADATA,
         task_id=args.task_id,
-        escalation_budget=args.k,
+        escalation_budget=escalation_budget,
         reviewer=reviewer,
         review_logger=DecisionLogger(
             reviewer_log_path,
@@ -175,7 +200,7 @@ def main() -> None:
             SystemMessage(load_system_message(None)),
             PolicyContextInitializer(
                 task_id=args.task_id,
-                escalation_budget=args.k,
+                escalation_budget=escalation_budget,
                 expected_remaining_risky_calls=(
                     args.expected_remaining_risky_calls
                 ),
@@ -187,7 +212,6 @@ def main() -> None:
     )
     pipeline.name = f"{args.model}-gated-policy"
 
-    suite = get_suite(args.benchmark_version, args.suite)
     task = suite.get_user_task_by_id(args.task_id)
     injection_task = None
     injections: dict[str, str] = {}
@@ -227,6 +251,7 @@ def main() -> None:
 
     print(f"run_id={run_id}")
     print(f"task_id={args.task_id}")
+    print(f"policy={args.policy}")
     print(f"attack_mode={attack_mode}")
     print(f"injection_task={args.injection_task}")
     print(f"utility={utility}")

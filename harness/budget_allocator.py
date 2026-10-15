@@ -45,11 +45,14 @@ class BudgetAllocator:
         effective_budget = max(1, remaining_escalations)
         tau = self.tau0 * effective_expected / effective_budget
 
-        # 预算耗尽必须先于 force_escalation 处理，否则会突破 k。
-        if remaining_escalations <= 0:
+        would_escalate = force_escalation or value > tau
+
+        # 预算耗尽时只拒绝本应升级的调用；低 value 调用照常按风险阈值决定。
+        # force_escalation 也属于本应升级，因此 Judge 失败时仍 fail closed。
+        if would_escalate and remaining_escalations <= 0:
             return self._result(
                 decision=Decision.DENY,
-                reason="Escalation budget is exhausted.",
+                reason="Call would be escalated but the escalation budget is exhausted.",
                 policy_name="p6_budget_exhausted",
                 risk_score=risk_score,
                 impact=impact,
