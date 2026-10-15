@@ -7,6 +7,7 @@ from unittest.mock import patch
 from agentdojo.agent_pipeline.tool_execution import ToolsExecutor
 from agentdojo.types import FunctionCall
 
+from harness.cost import TokenUsage
 from harness.policy import Decision, ToolMetadata
 from harness.decision_logger import DecisionLogger
 from harness.policy_engine import PolicyEngine
@@ -15,9 +16,15 @@ from harness.simulated_reviewer import ReviewResult
 
 
 class FakeReviewer:
-    def __init__(self, decision: Decision, success: bool = True) -> None:
+    def __init__(
+        self,
+        decision: Decision,
+        success: bool = True,
+        usage: TokenUsage | None = None,
+    ) -> None:
         self.decision = decision
         self.success = success
+        self.usage = usage
         self.calls = 0
 
     def review(self, request, trace_summary=""):
@@ -26,7 +33,43 @@ class FakeReviewer:
             decision=self.decision,
             reason="review reason",
             success=self.success,
+            usage=self.usage,
         )
+
+
+SEND_MONEY_METADATA = ToolMetadata(
+    name="send_money",
+    side_effect="write",
+    scope="external",
+    reversibility="irreversible",
+    sensitive_args=(),
+    impact=4,
+)
+GET_BALANCE_METADATA = ToolMetadata(
+    name="get_balance",
+    side_effect="read",
+    scope="local",
+    reversibility="reversible",
+    sensitive_args=(),
+    impact=1,
+)
+
+
+def _assistant_messages(function: str, call_id: str) -> list[dict]:
+    return [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                FunctionCall(
+                    function=function,
+                    args={},
+                    id=call_id,
+                    placeholder_args=None,
+                )
+            ],
+        }
+    ]
 
 
 class PolicyGateExecutorTests(unittest.TestCase):
@@ -312,6 +355,98 @@ class PolicyGateExecutorTests(unittest.TestCase):
             self.assertEqual(record["event_type"], "reviewer_decision")
             self.assertEqual(record["reviewer_verdict"], "DENY")
             self.assertEqual(record["decision"], "REQUIRE_APPROVAL")
+
+    def test_reviewer_log_records_reviewer_cost(self):
+        class FakeRuntime:
+            pass
+
+        usage = TokenUsage(
+            model="reviewer-model",
+            input_tokens=120,
+            output_tokens=30,
+            cached_input_tokens=20,
+            estimated_cost_usd=0.0042,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            log_path = Path(directory) / "reviewer.jsonl"
+            executor = PolicyGateToolsExecutor(
+                PolicyEngine(),
+                tool_metadata={"send_money": SEND_MONEY_METADATA},
+                escalation_budget=1,
+                reviewer=FakeReviewer(Decision.DENY, usage=usage),
+                review_logger=DecisionLogger(log_path, run_id="review-run"),
+            )
+
+            executor.query(
+                query="Pay rent.",
+                runtime=FakeRuntime(),
+                messages=_assistant_messages("send_money", "call-7"),
+                extra_args={"task_id": "review-task"},
+            )
+
+            record = json.loads(
+                log_path.read_text(encoding="utf-8").strip()
+            )
+            self.assertEqual(record["model_name"], "reviewer-model")
+            self.assertEqual(record["input_tokens"], 120)
+            self.assertEqual(record["output_tokens"], 30)
+            self.assertEqual(record["cached_input_tokens"], 20)
+            self.assertAlmostEqual(record["estimated_cost_usd"], 0.0042)
+            self.assertEqual(record["reviewer_model_name"], "reviewer-model")
+            self.assertEqual(record["reviewer_input_tokens"], 120)
+            self.assertEqual(record["reviewer_output_tokens"], 30)
+            self.assertEqual(record["reviewer_cached_input_tokens"], 20)
+            self.assertAlmostEqual(record["reviewer_cost_usd"], 0.0042)
+
+    def test_expected_risky_calls_count_down(self):
+        class FakeRuntime:
+            pass
+
+        executor = PolicyGateToolsExecutor(
+            PolicyEngine(),
+            tool_metadata={
+                "send_money": SEND_MONEY_METADATA,
+                "get_balance": GET_BALANCE_METADATA,
+            },
+            escalation_budget=5,
+            reviewer=FakeReviewer(Decision.DENY),
+        )
+        extra_args = {
+            "task_id": "risky-task",
+            "expected_remaining_risky_calls": 2,
+        }
+
+        # 只读调用由 P1 直接放行，不算风险调用。
+        with patch.object(
+            ToolsExecutor,
+            "query",
+            side_effect=lambda query, runtime, env, messages, extra_args: (
+                query,
+                runtime,
+                env,
+                [*messages, {"role": "tool", "content": "ok"}],
+                extra_args,
+            ),
+        ):
+            _, _, _, _, extra_args = executor.query(
+                query="Check my balance.",
+                runtime=FakeRuntime(),
+                messages=_assistant_messages("get_balance", "read-1"),
+                extra_args=extra_args,
+            )
+        self.assertEqual(extra_args["expected_remaining_risky_calls"], 2)
+
+        for expected in (1, 0, 0):
+            _, _, _, _, extra_args = executor.query(
+                query="Pay rent.",
+                runtime=FakeRuntime(),
+                messages=_assistant_messages("send_money", "send"),
+                extra_args=extra_args,
+            )
+            self.assertEqual(
+                extra_args["expected_remaining_risky_calls"],
+                expected,
+            )
 
 
 if __name__ == "__main__":

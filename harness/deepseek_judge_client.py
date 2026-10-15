@@ -3,7 +3,7 @@ from typing import Any
 
 from openai import OpenAI
 
-from .cost import TokenUsage, estimate_deepseek_usage
+from .cost import TokenUsage, usage_from_openai_response
 
 
 class DeepSeekJudgeClient:
@@ -49,18 +49,9 @@ class DeepSeekJudgeClient:
         if not content:
             raise RuntimeError("DeepSeek returned an empty response.")
 
-        usage = getattr(response, "usage", None)
-        input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
-        output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
-        prompt_details = getattr(usage, "prompt_tokens_details", None)
-        cached_input_tokens = int(
-            getattr(prompt_details, "cached_tokens", 0) or 0
-        )
-        self.last_usage = estimate_deepseek_usage(
+        self.last_usage = usage_from_openai_response(
+            response,
             model=self.model,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            cached_input_tokens=cached_input_tokens,
             period=self.cost_period,
         )
         return content

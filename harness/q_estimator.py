@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from .budget_allocator import DEFAULT_ALLOW_THRESHOLD
+
 
 @dataclass(frozen=True)
 class QEstimate:
@@ -14,7 +16,7 @@ class QEstimate:
 def estimate_q_table(
     log_path: str | Path,
     group_by: str = "tool_name",
-    baseline_threshold: float = 0.5,
+    baseline_threshold: float = DEFAULT_ALLOW_THRESHOLD,
     min_samples: int = 1,
 ) -> dict[str, float]:
     """
@@ -25,6 +27,9 @@ def estimate_q_table(
     - risk_score: 0 到 1
     - reviewer_verdict: ALLOW/APPROVE 或 DENY
     - tool_name: 默认分组字段
+
+    reviewer_success 为 false 的记录会被跳过：失败时的 DENY 是 fail-closed
+    默认值，不是 reviewer 的真实判断。stage 不是 p6 的记录也会被跳过。
     """
 
     grouped = _collect_q_estimates(
@@ -42,7 +47,7 @@ def estimate_q_table(
 def estimate_q_details(
     log_path: str | Path,
     group_by: str = "tool_name",
-    baseline_threshold: float = 0.5,
+    baseline_threshold: float = DEFAULT_ALLOW_THRESHOLD,
 ) -> dict[str, QEstimate]:
     """返回每组样本数、改变次数和 q，便于报告检查。"""
 
@@ -53,8 +58,26 @@ def estimate_q_details(
     )
 
 
+def load_q_table(path: str | Path) -> dict[str, float]:
+    """读取 build_q_table.py 输出的 JSON，并校验每个 q 在 0 到 1 之间。"""
+
+    payload = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    if not isinstance(payload, dict):
+        raise ValueError("q table must be a JSON object of tool_name -> q")
+
+    q_table: dict[str, float] = {}
+    for key, value in payload.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"q for {key!r} must be a number")
+        if not 0 <= value <= 1:
+            raise ValueError(f"q for {key!r} must be between 0 and 1")
+        q_table[str(key)] = float(value)
+    return q_table
+
+
 def _read_jsonl(log_path: str | Path) -> Iterable[dict[str, Any]]:
-    with Path(log_path).open("r", encoding="utf-8") as file:
+    # utf-8-sig 兼容 Windows PowerShell 5.1 写入的 BOM。
+    with Path(log_path).open("r", encoding="utf-8-sig") as file:
         for line_number, line in enumerate(file, start=1):
             stripped = line.strip()
             if not stripped:
@@ -77,6 +100,13 @@ def _collect_q_estimates(
 
     for record in records:
         if str(record.get("decision", "")).upper() != "REQUIRE_APPROVAL":
+            continue
+        # 旧日志没有 reviewer_success 字段，缺失时视为成功。
+        if record.get("reviewer_success", True) is False:
+            continue
+        # q 衡量 reviewer 改变 P6 自动决定的概率；baseline 或 P1-only 的
+        # risk_score 是固定值，不是 Judge 分数，不能混入。
+        if record.get("stage", "p6") != "p6":
             continue
 
         reviewer_decision = _normalize_reviewer_verdict(

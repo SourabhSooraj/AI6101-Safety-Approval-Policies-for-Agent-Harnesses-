@@ -17,6 +17,7 @@ class PolicyEngine:
         allocator: BudgetAllocator | None = None,
         q_table: dict[str, float] | None = None,
         decision_logger: DecisionLogger | None = None,
+        escalate_writes: bool = False,
     ) -> None:
         self.allowed_tools = set(allowed_tools or ())
         self.denied_tools = set(denied_tools or ())
@@ -24,6 +25,8 @@ class PolicyEngine:
         self.allocator = allocator
         self.q_table = dict(q_table or {})
         self.decision_logger = decision_logger
+        # baseline：只读调用放行，其余调用（含未知工具）全部交给 reviewer。
+        self.escalate_writes = escalate_writes
 
     def evaluate(self, request: PolicyRequest) -> PolicyResult:
         result = self._evaluate(request)
@@ -52,6 +55,9 @@ class PolicyEngine:
                 impact=1,
                 stage="explicit",
             )
+
+        if self.escalate_writes:
+            return self._evaluate_escalate_writes(request)
 
         p1_result = self._evaluate_p1(request)
         if (
@@ -95,6 +101,29 @@ class PolicyEngine:
             estimated_cost_usd=(
                 usage.estimated_cost_usd if usage is not None else 0.0
             ),
+        )
+
+    @staticmethod
+    def _evaluate_escalate_writes(request: PolicyRequest) -> PolicyResult:
+        metadata = request.tool_metadata
+        if metadata is not None and metadata.side_effect.casefold() == "read":
+            return PolicyResult(
+                decision=Decision.ALLOW,
+                reason="Read-only tool call.",
+                policy_name="baseline_read_only",
+                risk_score=0.0,
+                impact=metadata.impact,
+                stage="baseline",
+            )
+
+        # 不经过 P1 的 destructive 规则，让 reviewer 看到每一个写操作。
+        return PolicyResult(
+            decision=Decision.REQUIRE_APPROVAL,
+            reason="Baseline sends every non-read call to the reviewer.",
+            policy_name="baseline_escalate_write",
+            risk_score=1.0,
+            impact=metadata.impact if metadata is not None else 3,
+            stage="baseline",
         )
 
     @staticmethod
