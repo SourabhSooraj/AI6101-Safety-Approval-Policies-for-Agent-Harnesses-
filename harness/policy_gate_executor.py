@@ -239,16 +239,26 @@ class PolicyGateToolsExecutor(ToolsExecutor):
     @staticmethod
     def _reviewer_usage_fields(review_result: ReviewResult) -> dict[str, Any]:
         usage = review_result.usage
+        model_name = usage.model if usage is not None else None
+        input_tokens = usage.input_tokens if usage is not None else 0
+        output_tokens = usage.output_tokens if usage is not None else 0
+        cached_input_tokens = (
+            usage.cached_input_tokens if usage is not None else 0
+        )
+        cost_usd = usage.estimated_cost_usd if usage is not None else 0.0
         return {
-            "model_name": usage.model if usage is not None else None,
-            "input_tokens": usage.input_tokens if usage is not None else 0,
-            "output_tokens": usage.output_tokens if usage is not None else 0,
-            "cached_input_tokens": (
-                usage.cached_input_tokens if usage is not None else 0
-            ),
-            "estimated_cost_usd": (
-                usage.estimated_cost_usd if usage is not None else 0.0
-            ),
+            # 通用字段也改为 reviewer 成本，两份日志的 estimated_cost_usd 相加不重复。
+            "model_name": model_name,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cached_input_tokens": cached_input_tokens,
+            "estimated_cost_usd": cost_usd,
+            # 显式字段，按组件统计成本时不需要知道是哪份日志。
+            "reviewer_model_name": model_name,
+            "reviewer_input_tokens": input_tokens,
+            "reviewer_output_tokens": output_tokens,
+            "reviewer_cached_input_tokens": cached_input_tokens,
+            "reviewer_cost_usd": cost_usd,
         }
 
     @staticmethod

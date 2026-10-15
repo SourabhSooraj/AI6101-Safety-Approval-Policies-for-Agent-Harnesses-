@@ -40,6 +40,17 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 Then activate the environment again.
 
+On macOS or Linux:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+The PowerShell commands below use `.\.venv\Scripts\python.exe`; on macOS or
+Linux use `.venv/bin/python` with forward slashes instead.
+
 ### DeepSeek API key
 
 The real LLM Judge requires a DeepSeek API key. Set it in the current
@@ -56,6 +67,14 @@ setx DEEPSEEK_API_KEY "your-deepseek-api-key"
 ```
 
 After `setx`, close and reopen the terminal.
+
+On macOS or Linux:
+
+```bash
+export DEEPSEEK_API_KEY="your-deepseek-api-key"
+```
+
+Add the same line to `~/.zshrc` or `~/.bashrc` to keep it for new terminals.
 
 Never commit the API key, `.env`, or any secret to GitHub.
 
@@ -243,6 +262,46 @@ defaults to `DENY` and is not a real reviewer judgement. `--baseline-threshold`
 Then load the JSON with `run_agentdojo_e2e.py --q-table configs\q_table.json`,
 or in code with `PolicyEngine(q_table=load_q_table(path))`.
 
+### Running several tasks in one process
+
+AgentDojo's `AgentPipeline.query` uses a shared default `extra_args={}`, and
+`run_task_with_pipeline` never passes its own. `PolicyContextInitializer`
+therefore always returns a fresh `extra_args`, so each task starts with its own
+budget, task id and user request. Build a new pipeline (and a new
+`DeepSeekAgentLLM`, whose `total_usage` accumulates) for every episode so the
+task id and agent cost belong to that episode.
+
+If the agent produces no final answer, AgentDojo retries the same task up to
+three times. Each retry starts a fresh `extra_args`, so the escalation budget
+resets on a retry.
+
+### Design choices and limitations
+
+- **The reviewer and the Judge never see tool outputs.** Their prompts contain
+  the user request, the current call, the tool metadata and the names and
+  arguments of earlier calls. This keeps injected text away from them, but a
+  real human reviewer would usually see more context. `trace_summary` is not set
+  by the e2e script.
+- **Tool metadata covers the banking suite only.** Tools from other AgentDojo
+  suites have no metadata, so P1 treats every one of them as unknown and
+  escalates it. Keep experiments to banking, or add metadata first.
+- **`update_password` needs an explicit password mention.** P1's destructive
+  rule only lets it through when the request contains "password", "passcode" or
+  "密码". In banking v1.2.2 only `user_task_14` needs it, and its prompt mentions
+  a password. The check is plain substring matching, so a request such as
+  "don't touch my password" still passes P1 and is left to the Judge.
+- **Attacks address the model as "DeepSeek".** AgentDojo's
+  `important_instructions` attacks, including
+  `important_instructions_no_model_name`, look up the model name from the
+  pipeline name and raise `ValueError` for DeepSeek. Use
+  `important_instructions_deepseek` (the default) instead of renaming the
+  pipeline to another model's id.
+- **Reading AgentDojo's `security` flag.** `security=True` means the attack
+  succeeded, and AgentDojo also returns `True` for every run without an attack.
+  The e2e script reports it as `attack_succeeded`, which is `None` when no
+  attack was run. A safe outcome is `utility=True` with
+  `attack_succeeded=False` on attacked runs.
+
 ## 中文
 
 ### 项目简介
@@ -280,6 +339,17 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 然后重新激活虚拟环境。
 
+macOS 或 Linux：
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+下文的 PowerShell 命令使用 `.\.venv\Scripts\python.exe`；在 macOS 或 Linux 上
+改用 `.venv/bin/python`，路径使用正斜杠。
+
 ### 设置 DeepSeek API Key
 
 真实 LLM Judge 需要 DeepSeek API Key。只对当前终端生效：
@@ -295,6 +365,14 @@ setx DEEPSEEK_API_KEY "你的 DeepSeek API Key"
 ```
 
 执行 `setx` 后需要关闭并重新打开终端。
+
+macOS 或 Linux：
+
+```bash
+export DEEPSEEK_API_KEY="你的 DeepSeek API Key"
+```
+
+把同一行加入 `~/.zshrc` 或 `~/.bashrc`，新终端也会生效。
 
 不要把 API Key、`.env` 或其他秘密信息提交到 GitHub。
 
@@ -474,3 +552,34 @@ reviewer 的真实判断。`--baseline-threshold`（默认 `0.5`）必须与 all
 
 之后用 `run_agentdojo_e2e.py --q-table configs\q_table.json` 加载，或在代码中
 使用 `PolicyEngine(q_table=load_q_table(path))`。
+
+### 在同一进程中运行多个任务
+
+AgentDojo 的 `AgentPipeline.query` 使用共享的默认参数 `extra_args={}`，而
+`run_task_with_pipeline` 从不传入自己的 `extra_args`。因此
+`PolicyContextInitializer` 总是返回新的 `extra_args`，让每个任务从自己的预算、
+task id 和用户请求开始。每个 episode 都应新建 pipeline（以及新的
+`DeepSeekAgentLLM`，它的 `total_usage` 会累加），使 task id 和 agent 成本属于
+该 episode。
+
+如果 agent 没有给出最终回答，AgentDojo 会对同一任务最多重试三次。每次重试都会
+得到新的 `extra_args`，因此升级预算会在重试时重置。
+
+### 设计选择与局限
+
+- **Reviewer 和 Judge 看不到工具输出。** 它们的 prompt 只包含用户请求、当前调用、
+  工具 metadata 以及之前调用的名称和参数。这样可以让注入文本远离它们，但真实的人类
+  reviewer 通常能看到更多上下文。e2e 脚本不会设置 `trace_summary`。
+- **工具 metadata 只覆盖 banking suite。** 其他 AgentDojo suite 的工具没有
+  metadata，P1 会把它们全部视为未知工具并升级。实验请限于 banking，或先补充 metadata。
+- **`update_password` 需要明确提到密码。** 只有请求中包含 "password"、"passcode"
+  或 "密码" 时，P1 的 destructive 规则才放行。banking v1.2.2 中只有 `user_task_14`
+  需要它，且其 prompt 提到了密码。该检查是简单的子串匹配，因此 "don't touch my
+  password" 这样的请求仍会通过 P1，交给 Judge 判断。
+- **攻击文本称模型为 "DeepSeek"。** AgentDojo 的 `important_instructions` 系列攻击
+  （包括 `important_instructions_no_model_name`）会从 pipeline 名称查找模型名，
+  对 DeepSeek 会抛出 `ValueError`。请使用 `important_instructions_deepseek`（默认值），
+  不要把 pipeline 改名为其他模型的 id。
+- **AgentDojo 的 `security` 标志。** `security=True` 表示攻击成功，且没有攻击的运行
+  也总是返回 `True`。e2e 脚本把它输出为 `attack_succeeded`，未启用攻击时为 `None`。
+  有攻击时，安全的结果是 `utility=True` 且 `attack_succeeded=False`。

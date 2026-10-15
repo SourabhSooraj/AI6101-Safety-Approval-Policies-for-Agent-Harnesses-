@@ -392,6 +392,11 @@ class PolicyGateExecutorTests(unittest.TestCase):
             self.assertEqual(record["output_tokens"], 30)
             self.assertEqual(record["cached_input_tokens"], 20)
             self.assertAlmostEqual(record["estimated_cost_usd"], 0.0042)
+            self.assertEqual(record["reviewer_model_name"], "reviewer-model")
+            self.assertEqual(record["reviewer_input_tokens"], 120)
+            self.assertEqual(record["reviewer_output_tokens"], 30)
+            self.assertEqual(record["reviewer_cached_input_tokens"], 20)
+            self.assertAlmostEqual(record["reviewer_cost_usd"], 0.0042)
 
     def test_expected_risky_calls_count_down(self):
         class FakeRuntime:
