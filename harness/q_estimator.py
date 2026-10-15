@@ -61,7 +61,7 @@ def estimate_q_details(
 def load_q_table(path: str | Path) -> dict[str, float]:
     """读取 build_q_table.py 输出的 JSON，并校验每个 q 在 0 到 1 之间。"""
 
-    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    payload = json.loads(Path(path).read_text(encoding="utf-8-sig"))
     if not isinstance(payload, dict):
         raise ValueError("q table must be a JSON object of tool_name -> q")
 
@@ -76,7 +76,8 @@ def load_q_table(path: str | Path) -> dict[str, float]:
 
 
 def _read_jsonl(log_path: str | Path) -> Iterable[dict[str, Any]]:
-    with Path(log_path).open("r", encoding="utf-8") as file:
+    # utf-8-sig 兼容 Windows PowerShell 5.1 写入的 BOM。
+    with Path(log_path).open("r", encoding="utf-8-sig") as file:
         for line_number, line in enumerate(file, start=1):
             stripped = line.strip()
             if not stripped:

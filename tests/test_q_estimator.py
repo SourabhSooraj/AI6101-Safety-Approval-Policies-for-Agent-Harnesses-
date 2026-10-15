@@ -82,6 +82,22 @@ class QEstimatorTests(unittest.TestCase):
         self.assertEqual(details["send_money"].sample_count, 2)
         self.assertEqual(details["send_money"].changes, 1)
 
+    def test_reads_log_and_q_table_with_bom(self):
+        # Windows PowerShell 5.1 的 Set-Content -Encoding utf8 会写入 BOM。
+        bom_log = Path(self.temp_directory.name) / "bom.jsonl"
+        bom_log.write_text(
+            self.log_path.read_text(encoding="utf-8"),
+            encoding="utf-8-sig",
+        )
+        q_path = Path(self.temp_directory.name) / "bom_q_table.json"
+        q_path.write_text(json.dumps({"send_money": 0.5}), encoding="utf-8-sig")
+
+        self.assertEqual(
+            estimate_q_table(bom_log, min_samples=2),
+            {"send_money": 0.5},
+        )
+        self.assertEqual(load_q_table(q_path), {"send_money": 0.5})
+
     def test_load_q_table_round_trip(self):
         q_path = Path(self.temp_directory.name) / "q_table.json"
         q_path.write_text(
