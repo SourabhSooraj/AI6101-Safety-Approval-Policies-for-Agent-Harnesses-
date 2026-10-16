@@ -83,14 +83,12 @@ BANKING_TOOL_METADATA: dict[str, ToolMetadata] = {
         sensitive_args=("password",),
         impact=4,
         destructive=True,
+        # 只接受明确提到密码的请求；"change"/"reset" 这类泛词会让
+        # "change my address" 之类的请求也通过 destructive 规则。
         intent_keywords=(
             "password",
-            "reset",
-            "change",
+            "passcode",
             "密码",
-            "更新密码",
-            "改密码",
-            "重置密码",
         ),
     ),
     "update_user_info": ToolMetadata(

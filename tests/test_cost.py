@@ -1,10 +1,12 @@
 import unittest
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from harness.cost import (
     TokenUsage,
     estimate_deepseek_usage,
     is_deepseek_peak,
+    usage_from_openai_response,
 )
 
 
@@ -51,6 +53,34 @@ class CostTests(unittest.TestCase):
         self.assertEqual(total.output_tokens, 13)
         self.assertEqual(total.cached_input_tokens, 5)
         self.assertAlmostEqual(total.estimated_cost_usd, 0.03)
+
+    def test_usage_from_openai_response(self):
+        response = SimpleNamespace(
+            usage=SimpleNamespace(
+                prompt_tokens=1_000_000,
+                completion_tokens=1_000_000,
+                prompt_tokens_details=SimpleNamespace(cached_tokens=0),
+            )
+        )
+
+        usage = usage_from_openai_response(
+            response,
+            model="deepseek-flash",
+            period="off_peak",
+        )
+
+        self.assertEqual(usage.input_tokens, 1_000_000)
+        self.assertEqual(usage.output_tokens, 1_000_000)
+        self.assertAlmostEqual(usage.estimated_cost_usd, 0.75)
+
+    def test_usage_from_response_without_usage_is_zero(self):
+        usage = usage_from_openai_response(
+            SimpleNamespace(),
+            model="deepseek-flash",
+        )
+
+        self.assertEqual(usage.input_tokens, 0)
+        self.assertEqual(usage.estimated_cost_usd, 0.0)
 
 
 if __name__ == "__main__":

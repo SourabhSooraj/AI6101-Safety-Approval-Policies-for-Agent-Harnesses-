@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -66,6 +67,29 @@ def is_deepseek_peak(now: datetime | None = None) -> bool:
     if current.weekday() >= 5:
         return False
     return 1 <= current.hour < 4 or 6 <= current.hour < 10
+
+
+def usage_from_openai_response(
+    response: Any,
+    model: str,
+    period: str = "auto",
+) -> TokenUsage:
+    """从 OpenAI-compatible 响应的 usage 字段提取 token 并估算成本。"""
+
+    usage = getattr(response, "usage", None)
+    input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+    output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+    prompt_details = getattr(usage, "prompt_tokens_details", None)
+    cached_input_tokens = int(
+        getattr(prompt_details, "cached_tokens", 0) or 0
+    )
+    return estimate_deepseek_usage(
+        model=model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cached_input_tokens=cached_input_tokens,
+        period=period,
+    )
 
 
 def estimate_deepseek_usage(

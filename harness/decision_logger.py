@@ -47,6 +47,9 @@ class DecisionLogger:
             "value": result.value,
             "tau": result.tau,
             "remaining_escalations_at_decision": request.remaining_escalations,
+            "expected_remaining_risky_calls_at_decision": (
+                request.expected_remaining_risky_calls
+            ),
             "judge_success": result.judge_success,
             "judge_disagreement": result.judge_disagreement,
             "model_name": result.model_name,

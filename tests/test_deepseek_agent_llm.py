@@ -9,28 +9,43 @@ from harness.deepseek_agent_llm import (
 )
 
 
+def _completion(
+    content: str = "final answer",
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    reasoning_content: str | None = None,
+):
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(
+                    content=content,
+                    tool_calls=None,
+                    reasoning_content=reasoning_content,
+                )
+            )
+        ],
+        usage=SimpleNamespace(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=0),
+        ),
+    )
+
+
 class FakeCompletions:
-    def __init__(self):
+    def __init__(self, responses=None):
         self.calls = []
+        self.responses = iter(responses or [_completion()])
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
-        return SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(
-                        content="final answer",
-                        tool_calls=None,
-                        reasoning_content="internal reasoning",
-                    )
-                )
-            ]
-        )
+        return next(self.responses)
 
 
 class FakeDeepSeekClient:
-    def __init__(self):
-        self.completions = FakeCompletions()
+    def __init__(self, responses=None):
+        self.completions = FakeCompletions(responses)
         self.chat = SimpleNamespace(completions=self.completions)
 
 
@@ -58,7 +73,13 @@ class DeepSeekAgentLLMTests(unittest.TestCase):
         self.assertEqual(converted["content"][0]["text"], "Pay the bill.")
 
     def test_disables_thinking_by_default(self):
-        client = FakeDeepSeekClient()
+        client = FakeDeepSeekClient(
+            [
+                _completion(
+                    reasoning_content="internal reasoning",
+                )
+            ]
+        )
         llm = DeepSeekAgentLLM(client, "deepseek-flash", temperature=0.0)
         messages = [
             {
@@ -111,6 +132,26 @@ class DeepSeekAgentLLMTests(unittest.TestCase):
             request_message["reasoning_content"],
             "previous reasoning",
         )
+
+    def test_agent_usage_is_accumulated(self):
+        client = FakeDeepSeekClient(
+            [
+                _completion(prompt_tokens=1_000_000),
+                _completion(completion_tokens=1_000_000),
+            ]
+        )
+        llm = DeepSeekAgentLLM(
+            client=client,
+            model="deepseek-flash",
+            cost_period="off_peak",
+        )
+
+        for _ in range(2):
+            llm.query("Pay the bill.", FunctionsRuntime({}))
+
+        self.assertEqual(llm.total_usage.input_tokens, 1_000_000)
+        self.assertEqual(llm.total_usage.output_tokens, 1_000_000)
+        self.assertAlmostEqual(llm.total_usage.estimated_cost_usd, 0.75)
 
 
 if __name__ == "__main__":

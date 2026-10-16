@@ -33,18 +33,16 @@ class PolicyContextInitializer(BasePipelineElement):
         messages: Sequence[ChatMessage] = (),
         extra_args: dict | None = None,
     ) -> tuple[str, FunctionsRuntime, Env, Sequence[ChatMessage], dict]:
-        if extra_args is None:
-            extra_args = {}
-
-        extra_args.setdefault("task_id", self.task_id)
-        extra_args.setdefault("user_request", query)
-        extra_args.setdefault("escalation_budget", self.escalation_budget)
-        extra_args.setdefault(
-            "remaining_escalations",
-            self.escalation_budget,
-        )
-        extra_args.setdefault(
-            "expected_remaining_risky_calls",
-            self.expected_remaining_risky_calls,
-        )
-        return query, runtime, env, messages, extra_args
+        # AgentPipeline.query 的默认参数 extra_args={} 在所有调用间共享，
+        # run_task_with_pipeline 又不传 extra_args，所以上一个任务的预算、
+        # task_id 和 user_request 会泄漏到下一个任务。这里总是返回新字典，
+        # 不读取也不修改传入的对象。
+        fresh_args = {
+            "task_id": self.task_id,
+            "user_request": query,
+            "escalation_budget": self.escalation_budget,
+            "remaining_escalations": self.escalation_budget,
+            "escalations_used": 0,
+            "expected_remaining_risky_calls": self.expected_remaining_risky_calls,
+        }
+        return query, runtime, env, messages, fresh_args
