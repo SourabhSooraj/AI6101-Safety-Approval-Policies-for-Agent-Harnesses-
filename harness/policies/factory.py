@@ -42,9 +42,12 @@ def normalize_variant(variant: str) -> str:
 
 
 def escalation_budget_for(variant: str, k: int) -> int:
-    """escalate_all 和 no_budget 不限预算，其余 policy 使用 k。"""
+    """
+    所有 policy（包括两个 baseline）都使用同一个 k，以便画 TCR@k 曲线；
+    只有 no_budget 消融不限预算。
+    """
 
-    if normalize_variant(variant) in {"escalate_all", "no_budget"}:
+    if normalize_variant(variant) == "no_budget":
         return UNLIMITED_ESCALATIONS
     return k
 

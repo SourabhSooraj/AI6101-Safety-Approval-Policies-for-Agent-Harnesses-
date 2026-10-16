@@ -47,7 +47,8 @@ class BudgetAllocator:
 
         would_escalate = force_escalation or value > tau
 
-        # 预算耗尽时只拒绝本应升级的调用；低 value 调用照常按风险阈值决定。
+        # 项目要求：预算 k 用完后，任何本应升级的决定都视为 auto-deny。
+        # 不需要升级的低 value 调用照常按风险阈值决定。
         # force_escalation 也属于本应升级，因此 Judge 失败时仍 fail closed。
         if would_escalate and remaining_escalations <= 0:
             return self._result(

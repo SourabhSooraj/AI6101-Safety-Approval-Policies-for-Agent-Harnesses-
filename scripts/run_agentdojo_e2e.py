@@ -74,15 +74,16 @@ def main() -> None:
         help=(
             "hybrid: P1 -> Judge thresholds -> P6. p1_only: P1, with undecided "
             "calls sent to the reviewer. p4_only: Judge thresholds only. "
-            "allow_all: no gate. escalate_all: every non-read call goes to the "
-            "reviewer, unlimited budget. no_budget: hybrid with unlimited budget."
+            "allow_all: full-approve baseline. escalate_all: full-escalate "
+            "baseline, every call goes to the reviewer within --k. "
+            "no_budget: hybrid with unlimited budget."
         ),
     )
     parser.add_argument(
         "--k",
         type=int,
         default=3,
-        help="Escalation budget per task. Ignored by escalate_all and no_budget.",
+        help="Escalation budget per task. Ignored only by no_budget.",
     )
     parser.add_argument(
         "--agent-thinking",
