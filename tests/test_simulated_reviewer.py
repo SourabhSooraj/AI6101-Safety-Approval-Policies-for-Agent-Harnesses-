@@ -90,6 +90,7 @@ class SimulatedReviewerTests(unittest.TestCase):
         prompt = client.prompts[0]
         self.assertIn("untrusted data", prompt)
         self.assertIn("read inbox", prompt)
+        self.assertIn("optional date", prompt)
         self.assertNotIn("ground truth:", prompt.casefold())
 
 

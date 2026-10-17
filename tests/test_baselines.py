@@ -18,7 +18,7 @@ class CountingJudgeClient:
 
     def complete(self, prompt: str) -> str:
         self.call_count += 1
-        return '{"risk_score": 0.9, "reason": "unexpected"}'
+        return '{"risk_score": 0.5, "reason": "uncertain"}'
 
 
 def _request(tool_name: str, user_request: str = "Pay my rent.") -> PolicyRequest:

@@ -38,6 +38,7 @@ class DecisionLogger:
             "user_request": request.user_request,
             "decision": result.decision.value,
             "policy_name": result.policy_name,
+            "policy_variant": result.policy_variant,
             "reason": result.reason,
             "stage": result.stage,
             "risk_score": result.risk_score,

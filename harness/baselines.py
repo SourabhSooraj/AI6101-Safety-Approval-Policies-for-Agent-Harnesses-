@@ -6,7 +6,15 @@ from .llm_judge import LLMJudge
 from .policy_engine import PolicyEngine
 
 # 实验中对比的 policy 设置；full 是完整系统，其余为 baseline。
-POLICIES = ("full", "allow_all", "escalate_all", "p1_only", "no_budget")
+POLICIES = (
+    "full",
+    "hybrid",
+    "allow_all",
+    "escalate_all",
+    "p1_only",
+    "p4_only",
+    "no_budget",
+)
 
 # "无限" reviewer 预算：远大于一个任务可能产生的调用数。
 UNLIMITED_ESCALATIONS = 1_000_000
@@ -29,21 +37,36 @@ def build_policy_engine(
     tool_names: Iterable[str],
     q_table: dict[str, float] | None = None,
     decision_logger: DecisionLogger | None = None,
+    t_low: float = 0.3,
+    t_high: float = 0.7,
 ) -> PolicyEngine:
     """
-    - full / no_budget：P1 -> Judge -> P6（no_budget 只是预算不同）
+    - full / hybrid / no_budget：P1 -> Judge -> P6（no_budget 只是预算不同）
+    - p4_only：只运行 LLM Judge 和固定阈值
     - allow_all：没有 gate，所有工具直接执行
     - escalate_all：只读调用放行，其余全部交给 reviewer
     - p1_only：只用 P1，P1 无法决定的调用直接交给 reviewer
     """
 
     _check_policy(policy)
-    if policy in {"full", "no_budget"}:
+    if policy in {"full", "hybrid", "no_budget"}:
         return PolicyEngine(
+            policy_variant="hybrid",
             judge=judge,
             allocator=allocator,
             q_table=q_table,
             decision_logger=decision_logger,
+            t_low=t_low,
+            t_high=t_high,
+        )
+    if policy == "p4_only":
+        return PolicyEngine(
+            policy_variant="p4_only",
+            judge=judge,
+            allocator=allocator,
+            decision_logger=decision_logger,
+            t_low=t_low,
+            t_high=t_high,
         )
     if policy == "allow_all":
         return PolicyEngine(
