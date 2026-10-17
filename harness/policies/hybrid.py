@@ -32,7 +32,8 @@ class HybridPolicy:
     def evaluate(self, request: PolicyRequest) -> PolicyResult:
         p1_result = evaluate_p1(request)
         if p1_result.decision != Decision.REQUIRE_APPROVAL:
-            return p1_result
+            # evaluate_p1 标记为 p1_only；在 hybrid 中做出的决定要记为 hybrid。
+            return replace(p1_result, policy_variant=self.name)
 
         judge_result = self.judge.score(request)
         impact = (
