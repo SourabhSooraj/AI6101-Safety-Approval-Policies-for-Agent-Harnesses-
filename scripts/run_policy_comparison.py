@@ -11,6 +11,54 @@ if str(REPO_ROOT) not in sys.path:
 
 from harness.policies import POLICY_VARIANTS
 
+# Options passed unchanged to run_agentdojo_e2e.py when given.
+PASSTHROUGH_OPTIONS = (
+    ("--sample-count", "Judge samples per call."),
+    ("--model", "Agent model."),
+    ("--agent-base-url", "OpenAI-compatible base URL for the agent."),
+    ("--agent-api-key-env", "Environment variable holding the agent API key."),
+    ("--judge-model", "Judge model."),
+    ("--judge-base-url", "OpenAI-compatible base URL for the Judge."),
+    ("--judge-api-key-env", "Environment variable holding the Judge API key."),
+    ("--reviewer-model", "Simulated reviewer model."),
+    ("--reviewer-base-url", "OpenAI-compatible base URL for the reviewer."),
+    ("--reviewer-api-key-env", "Environment variable holding the reviewer API key."),
+    ("--attack", "AgentDojo attack name used with injection tasks."),
+    ("--attack-model-name", "Model name the attack text addresses."),
+)
+
+
+def _dest(option: str) -> str:
+    return option.lstrip("-").replace("-", "_")
+
+
+def build_command(
+    args: argparse.Namespace,
+    policy: str,
+    k_value: int,
+    task_id: str,
+    injection_task: str,
+) -> list[str]:
+    command = [
+        sys.executable,
+        str(RUNNER),
+        "--policy",
+        policy,
+        "--k",
+        str(k_value),
+        "--task-id",
+        task_id,
+    ]
+    for option, _ in PASSTHROUGH_OPTIONS:
+        value = getattr(args, _dest(option))
+        if value is not None:
+            command += [option, str(value)]
+    if args.agent_thinking:
+        command.append("--agent-thinking")
+    if injection_task != "none":
+        command += ["--injection-task", injection_task]
+    return command
+
 
 def _parse_output(output: str, key: str) -> str:
     prefix = f"{key}="
@@ -20,7 +68,7 @@ def _parse_output(output: str, key: str) -> str:
     return "unknown"
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Compare policy variants. Each run is a separate process, so no "
@@ -41,32 +89,31 @@ def main() -> None:
         default=["none"],
         help="Injection task ids; 'none' runs without an attack.",
     )
+    for option, help_text in PASSTHROUGH_OPTIONS:
+        parser.add_argument(
+            option,
+            type=int if option == "--sample-count" else str,
+            help=f"{help_text} Defaults to run_agentdojo_e2e.py's default.",
+        )
     parser.add_argument(
-        "--sample-count",
-        type=int,
-        help="Judge samples per call. Defaults to run_agentdojo_e2e.py's default.",
+        "--agent-thinking",
+        action="store_true",
+        help="Enable DeepSeek thinking mode for the agent (DeepSeek API only).",
     )
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
 
     failures = 0
     for policy in args.policies:
         for k_value in args.k_values:
             for task_id in args.task_ids:
                 for injection_task in args.injection_tasks:
-                    command = [
-                        sys.executable,
-                        str(RUNNER),
-                        "--policy",
-                        policy,
-                        "--k",
-                        str(k_value),
-                        "--task-id",
-                        task_id,
-                    ]
-                    if args.sample_count is not None:
-                        command += ["--sample-count", str(args.sample_count)]
-                    if injection_task != "none":
-                        command += ["--injection-task", injection_task]
+                    command = build_command(
+                        args, policy, k_value, task_id, injection_task
+                    )
 
                     result = subprocess.run(
                         command,

@@ -2,9 +2,11 @@ import argparse
 import json
 import os
 import sys
-from dataclasses import asdict
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 import openai
 
@@ -19,11 +21,12 @@ from agentdojo.agent_pipeline import (
     ToolsExecutionLoop,
 )
 from agentdojo.agent_pipeline.agent_pipeline import load_system_message
-from agentdojo.attacks import load_attack
+from agentdojo.attacks import FixedJailbreakAttack, load_attack
 from agentdojo.logging import OutputLogger, TraceLogger
 from agentdojo.task_suite.load_suites import get_suite
 
 import harness.attacks  # noqa: F401 - 注册 important_instructions_deepseek
+from harness.attacks import attack_model_name_for
 from harness.budget_allocator import BudgetAllocator
 from harness.decision_logger import DecisionLogger
 from harness.deepseek_agent_llm import DeepSeekAgentLLM
@@ -36,6 +39,100 @@ from harness.policy_gate_executor import PolicyGateToolsExecutor
 from harness.q_estimator import load_q_table
 from harness.simulated_reviewer import SimulatedReviewer
 from harness.tool_metadata import BANKING_TOOL_METADATA
+
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+# Local OpenAI-compatible servers (Ollama, vLLM) accept any key.
+LOCAL_PLACEHOLDER_KEY = "local-no-key"
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
+
+
+@dataclass(frozen=True)
+class Endpoint:
+    model: str
+    base_url: str
+    api_key_env: str
+    api_key: str
+
+
+@dataclass(frozen=True)
+class ModelSettings:
+    agent: Endpoint
+    judge: Endpoint
+    reviewer: Endpoint
+    send_thinking_param: bool
+    attack_model_name: str
+
+
+def _host(base_url: str) -> str:
+    return (urlparse(base_url).hostname or "").lower()
+
+
+def _is_deepseek_api(base_url: str) -> bool:
+    host = _host(base_url)
+    return host == "deepseek.com" or host.endswith(".deepseek.com")
+
+
+def _resolve_api_key(
+    env_name: str,
+    base_url: str,
+    environ: Mapping[str, str],
+) -> str:
+    api_key = environ.get(env_name)
+    if api_key:
+        return api_key
+    if _host(base_url) in _LOCAL_HOSTS:
+        return LOCAL_PLACEHOLDER_KEY
+    raise SystemExit(f"{env_name} is not set (needed for {base_url}).")
+
+
+def resolve_model_settings(
+    args: argparse.Namespace,
+    environ: Mapping[str, str] = os.environ,
+) -> ModelSettings:
+    """Work out model, server and key per role. Judge and reviewer follow the agent unless set."""
+
+    agent = Endpoint(
+        model=args.model,
+        base_url=args.agent_base_url,
+        api_key_env=args.agent_api_key_env,
+        api_key=_resolve_api_key(
+            args.agent_api_key_env, args.agent_base_url, environ
+        ),
+    )
+
+    def follow_agent(model, base_url, api_key_env) -> Endpoint:
+        url = base_url or agent.base_url
+        env_name = api_key_env or agent.api_key_env
+        return Endpoint(
+            model=model or agent.model,
+            base_url=url,
+            api_key_env=env_name,
+            api_key=_resolve_api_key(env_name, url, environ),
+        )
+
+    judge = follow_agent(
+        args.judge_model, args.judge_base_url, args.judge_api_key_env
+    )
+    reviewer = follow_agent(
+        args.reviewer_model, args.reviewer_base_url, args.reviewer_api_key_env
+    )
+
+    send_thinking_param = _is_deepseek_api(agent.base_url)
+    if args.agent_thinking and not send_thinking_param:
+        raise SystemExit(
+            "--agent-thinking only works with the DeepSeek API "
+            f"(--agent-base-url {DEEPSEEK_BASE_URL})."
+        )
+
+    return ModelSettings(
+        agent=agent,
+        judge=judge,
+        reviewer=reviewer,
+        send_thinking_param=send_thinking_param,
+        attack_model_name=(
+            args.attack_model_name or attack_model_name_for(agent.model)
+        ),
+    )
 
 
 def _system_message(auto_complete: bool) -> str:
@@ -50,7 +147,7 @@ def _system_message(auto_complete: bool) -> str:
     )
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     threshold_path = REPO_ROOT / "configs" / "judge_thresholds.json"
     thresholds = json.loads(threshold_path.read_text(encoding="utf-8-sig"))
 
@@ -60,7 +157,29 @@ def main() -> None:
     parser.add_argument("--benchmark-version", default="v1.2.2")
     parser.add_argument("--suite", default="banking")
     parser.add_argument("--task-id", default="user_task_0")
-    parser.add_argument("--model", default="deepseek-flash")
+    parser.add_argument("--model", default="deepseek-flash", help="Agent model.")
+    parser.add_argument(
+        "--agent-base-url",
+        default=DEEPSEEK_BASE_URL,
+        help="OpenAI-compatible base URL for the agent, e.g. http://localhost:11434/v1 for Ollama.",
+    )
+    parser.add_argument(
+        "--agent-api-key-env",
+        default="DEEPSEEK_API_KEY",
+        help="Environment variable holding the agent API key. Not needed for localhost.",
+    )
+    parser.add_argument(
+        "--judge-model",
+        help="Judge model. Defaults to --model.",
+    )
+    parser.add_argument(
+        "--judge-base-url",
+        help="OpenAI-compatible base URL for the Judge. Defaults to --agent-base-url.",
+    )
+    parser.add_argument(
+        "--judge-api-key-env",
+        help="Environment variable holding the Judge API key. Defaults to --agent-api-key-env.",
+    )
     parser.add_argument(
         "--sample-count",
         type=int,
@@ -88,7 +207,7 @@ def main() -> None:
     parser.add_argument(
         "--agent-thinking",
         action="store_true",
-        help="Enable DeepSeek thinking mode for the agent.",
+        help="Enable DeepSeek thinking mode for the agent (DeepSeek API only).",
     )
     parser.add_argument(
         "--no-auto-complete",
@@ -131,37 +250,40 @@ def main() -> None:
         help="AgentDojo attack name used with --injection-task.",
     )
     parser.add_argument(
+        "--attack-model-name",
+        help=(
+            "Model name the attack text addresses. Defaults to a name guessed "
+            "from --model (DeepSeek, Llama, Qwen, ...)."
+        ),
+    )
+    parser.add_argument(
         "--reviewer-model",
         help="Simulated reviewer model. Defaults to --model.",
     )
     parser.add_argument(
         "--reviewer-base-url",
-        default="https://api.deepseek.com",
-        help="OpenAI-compatible base URL for the reviewer model.",
+        help="OpenAI-compatible base URL for the reviewer. Defaults to --agent-base-url.",
     )
     parser.add_argument(
         "--reviewer-api-key-env",
-        default="DEEPSEEK_API_KEY",
-        help="Environment variable holding the reviewer API key.",
+        help="Environment variable holding the reviewer API key. Defaults to --agent-api-key-env.",
     )
-    args = parser.parse_args()
+    return parser
 
-    api_key = os.environ.get("DEEPSEEK_API_KEY")
-    if not api_key:
-        raise SystemExit("DEEPSEEK_API_KEY is not set.")
-    reviewer_api_key = os.environ.get(args.reviewer_api_key_env)
-    if not reviewer_api_key:
-        raise SystemExit(f"{args.reviewer_api_key_env} is not set.")
 
-    reviewer_model = args.reviewer_model or args.model
+def main() -> None:
+    args = build_parser().parse_args()
+    settings = resolve_model_settings(args)
+    reviewer_model = settings.reviewer.model
+
     if args.sample_count < 2:
         print(
             "WARNING: --sample-count < 2 disables Judge disagreement detection.",
             file=sys.stderr,
         )
-    if reviewer_model == args.model:
+    if reviewer_model in {settings.agent.model, settings.judge.model}:
         print(
-            "WARNING: the reviewer uses the same model as the agent and Judge; "
+            "WARNING: the reviewer uses the same model as the agent or Judge; "
             "use --reviewer-model with a different model family for final experiments.",
             file=sys.stderr,
         )
@@ -191,19 +313,31 @@ def main() -> None:
         "t_high": args.t_high,
         "auto_complete": auto_complete,
         "agent_thinking": args.agent_thinking,
+        "agent_model": settings.agent.model,
+        "agent_base_url": settings.agent.base_url,
+        "judge_model": settings.judge.model,
+        "judge_base_url": settings.judge.base_url,
         "reviewer_model": reviewer_model,
+        "reviewer_base_url": settings.reviewer.base_url,
+        "attack_model_name": (
+            settings.attack_model_name if args.injection_task else None
+        ),
     }
 
     judge = LLMJudge(
-        client=DeepSeekJudgeClient(model=args.model),
+        client=DeepSeekJudgeClient(
+            model=settings.judge.model,
+            base_url=settings.judge.base_url,
+            api_key=settings.judge.api_key,
+        ),
         sample_count=args.sample_count,
-        model_name=args.model,
+        model_name=settings.judge.model,
     )
     reviewer = SimulatedReviewer(
         client=DeepSeekJudgeClient(
             model=reviewer_model,
-            base_url=args.reviewer_base_url,
-            api_key=reviewer_api_key,
+            base_url=settings.reviewer.base_url,
+            api_key=settings.reviewer.api_key,
         ),
         model_name=f"{reviewer_model}-reviewer",
     )
@@ -234,15 +368,16 @@ def main() -> None:
     )
 
     agent_client = openai.OpenAI(
-        api_key=api_key,
-        base_url="https://api.deepseek.com",
+        api_key=settings.agent.api_key,
+        base_url=settings.agent.base_url,
         timeout=120.0,
     )
     agent_llm = DeepSeekAgentLLM(
         agent_client,
-        args.model,
+        settings.agent.model,
         temperature=0.0,
         thinking=args.agent_thinking,
+        send_thinking_param=settings.send_thinking_param,
     )
     pipeline = AgentPipeline(
         [
@@ -267,6 +402,8 @@ def main() -> None:
     if args.injection_task:
         injection_task = suite.get_injection_task_by_id(args.injection_task)
         attack = load_attack(args.attack, suite, pipeline)
+        if isinstance(attack, FixedJailbreakAttack):
+            attack.model_name = settings.attack_model_name
         injections = attack.attack(task, injection_task)
 
     with TraceLogger(

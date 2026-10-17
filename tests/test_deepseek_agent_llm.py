@@ -113,6 +113,30 @@ class DeepSeekAgentLLMTests(unittest.TestCase):
             "internal reasoning",
         )
 
+    def test_non_deepseek_api_gets_no_thinking_field(self):
+        client = FakeDeepSeekClient()
+        llm = DeepSeekAgentLLM(
+            client,
+            "qwen2.5:7b",
+            temperature=0.0,
+            send_thinking_param=False,
+        )
+
+        llm.query("Pay the bill.", FunctionsRuntime({}))
+
+        request = client.completions.calls[0]
+        self.assertNotIn("extra_body", request)
+        self.assertEqual(request["temperature"], 0.0)
+
+    def test_thinking_without_deepseek_api_is_rejected(self):
+        with self.assertRaises(ValueError):
+            DeepSeekAgentLLM(
+                FakeDeepSeekClient(),
+                "qwen2.5:7b",
+                thinking=True,
+                send_thinking_param=False,
+            )
+
     def test_preserves_reasoning_content_when_thinking_enabled(self):
         client = FakeDeepSeekClient()
         llm = DeepSeekAgentLLM(

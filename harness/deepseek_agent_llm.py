@@ -93,7 +93,12 @@ class DeepSeekAgentLLM(OpenAILLM):
         temperature: float | None = 0.0,
         thinking: bool = False,
         cost_period: str = "auto",
+        send_thinking_param: bool = True,
     ) -> None:
+        # thinking 字段是 DeepSeek 专有参数；Llama/Qwen 等其他 OpenAI-compatible
+        # 服务可能拒绝它，因此非 DeepSeek API 时不发送。
+        if thinking and not send_thinking_param:
+            raise ValueError("Thinking mode is only available on the DeepSeek API.")
         super().__init__(
             client,
             model,
@@ -101,6 +106,7 @@ class DeepSeekAgentLLM(OpenAILLM):
             temperature=temperature,
         )
         self.thinking = thinking
+        self.send_thinking_param = send_thinking_param
         self.cost_period = cost_period
         # 累计 agent 自身的 token 和成本；Judge/reviewer 成本记录在决策日志中。
         self.total_usage = TokenUsage.zero(self.model)
@@ -127,12 +133,13 @@ class DeepSeekAgentLLM(OpenAILLM):
         create_args = {
             "model": self.model,
             "messages": openai_messages,
-            "extra_body": {
+        }
+        if self.send_thinking_param:
+            create_args["extra_body"] = {
                 "thinking": {
                     "type": "enabled" if self.thinking else "disabled"
                 }
-            },
-        }
+            }
         if openai_tools:
             create_args["tools"] = openai_tools
             create_args["tool_choice"] = "auto"
