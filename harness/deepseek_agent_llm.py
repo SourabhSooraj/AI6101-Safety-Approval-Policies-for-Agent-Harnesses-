@@ -1,5 +1,6 @@
 from collections.abc import Sequence
 
+import openai
 from agentdojo.agent_pipeline import OpenAILLM
 from agentdojo.agent_pipeline.llms.openai_llm import (
     _content_blocks_to_openai_content_blocks,
@@ -9,6 +10,12 @@ from agentdojo.agent_pipeline.llms.openai_llm import (
 )
 from agentdojo.functions_runtime import EmptyEnv, Env, FunctionsRuntime
 from agentdojo.types import ChatMessage
+from tenacity import (
+    retry,
+    retry_if_not_exception_type,
+    stop_after_attempt,
+    wait_random_exponential,
+)
 
 from .cost import TokenUsage, usage_from_openai_response
 from .llm_providers import strip_think, thinking_request_args, thinking_switch
@@ -75,6 +82,20 @@ def _openai_to_deepseek_assistant(message):
     return output
 
 
+# 与 AgentDojo chat_completion_request 相同的重试策略：临时错误最多尝试 3 次，
+# 请求本身有问题（400/422）时不重试。
+@retry(
+    wait=wait_random_exponential(multiplier=1, max=40),
+    stop=stop_after_attempt(3),
+    reraise=True,
+    retry=retry_if_not_exception_type(
+        (openai.BadRequestError, openai.UnprocessableEntityError)
+    ),
+)
+def _create_completion(client, **create_args):
+    return client.chat.completions.create(**create_args)
+
+
 class DeepSeekAgentLLM(OpenAILLM):
     """AgentDojo OpenAILLM 的 DeepSeek / Ollama 兼容版本。"""
 
@@ -86,7 +107,14 @@ class DeepSeekAgentLLM(OpenAILLM):
         temperature: float | None = 0.0,
         thinking: bool = False,
         cost_period: str = "auto",
+        send_thinking_param: bool = True,
     ) -> None:
+        # 思考开关只发给 DeepSeek API（extra_body.thinking）和本地 Ollama
+        # （reasoning_effort）；其他 OpenAI-compatible 服务可能拒绝这些字段。
+        if thinking and not send_thinking_param:
+            raise ValueError(
+                "Thinking mode is only available on the DeepSeek API or a local server."
+            )
         super().__init__(
             client,
             model,
@@ -94,6 +122,7 @@ class DeepSeekAgentLLM(OpenAILLM):
             temperature=temperature,
         )
         self.thinking = thinking
+        self.send_thinking_param = send_thinking_param
         self.cost_period = cost_period
         # 累计 agent 自身的 token 和成本；Judge/reviewer 成本记录在决策日志中。
         self.total_usage = TokenUsage.zero(self.model)
@@ -124,19 +153,22 @@ class DeepSeekAgentLLM(OpenAILLM):
         create_args = {
             "model": self.model,
             "messages": openai_messages,
-            **thinking_request_args(
-                str(getattr(self.client, "base_url", "")),
-                self.thinking,
-                self.reasoning_effort,
-            ),
         }
+        if self.send_thinking_param:
+            create_args.update(
+                thinking_request_args(
+                    str(getattr(self.client, "base_url", "")),
+                    self.thinking,
+                    self.reasoning_effort,
+                )
+            )
         if openai_tools:
             create_args["tools"] = openai_tools
             create_args["tool_choice"] = "auto"
         if not self.thinking:
             create_args["temperature"] = self.temperature
 
-        completion = self.client.chat.completions.create(**create_args)
+        completion = _create_completion(self.client, **create_args)
         self.total_usage = self.total_usage + usage_from_openai_response(
             completion,
             model=self.model,

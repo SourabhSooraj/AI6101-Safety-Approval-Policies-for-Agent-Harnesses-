@@ -11,13 +11,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from harness.baselines import POLICIES
 from harness.episode import (
     add_episode_args,
     config_from_args,
     print_config_warnings,
     run_episode,
 )
+from harness.policies import POLICY_VARIANTS
 
 # banking v1.2.2 有 16 个 user task：0-7 用于调参和 q table，8-15 只用于最终测试。
 SPLITS = {
@@ -41,8 +41,8 @@ def main() -> None:
     parser.add_argument(
         "--policies",
         nargs="+",
-        choices=POLICIES,
-        default=["full"],
+        choices=POLICY_VARIANTS,
+        default=["hybrid"],
     )
     parser.add_argument(
         "--injection-tasks",

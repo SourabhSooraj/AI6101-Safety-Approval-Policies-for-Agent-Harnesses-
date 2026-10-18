@@ -13,19 +13,33 @@ from agentdojo.agent_pipeline import (
     ToolsExecutionLoop,
 )
 from agentdojo.agent_pipeline.agent_pipeline import load_system_message
-from agentdojo.attacks import load_attack
+from agentdojo.attacks import FixedJailbreakAttack, load_attack
 from agentdojo.logging import OutputLogger, TraceLogger
 from agentdojo.task_suite.load_suites import get_suite
 
 from . import attacks  # noqa: F401 - 注册 important_instructions_deepseek
-from .baselines import POLICIES, build_policy_engine, escalation_budget_for
-from .budget_allocator import BudgetAllocator
+from .attacks import attack_model_name_for
+from .budget_allocator import (
+    DEFAULT_ALLOW_THRESHOLD,
+    DEFAULT_COST_TAU0,
+    DEFAULT_REVIEWER_ERRORS,
+    BudgetAllocator,
+    CostBasedAllocator,
+    load_reviewer_error_table,
+)
 from .decision_logger import DecisionLogger
 from .deepseek_agent_llm import DeepSeekAgentLLM
 from .deepseek_judge_client import DeepSeekJudgeClient
 from .llm_judge import LLMJudge
-from .llm_providers import PROVIDERS, is_local_base_url, resolve_api_key
+from .llm_providers import (
+    PROVIDERS,
+    is_local_base_url,
+    resolve_api_key,
+    supports_thinking_switch,
+)
+from .policies import POLICY_VARIANTS, escalation_budget_for
 from .policy_context import PolicyContextInitializer
+from .policy_engine import PolicyEngine
 from .policy_gate_executor import PolicyGateToolsExecutor
 from .q_estimator import load_q_table
 from .simulated_reviewer import SimulatedReviewer
@@ -33,6 +47,7 @@ from .tool_metadata import BANKING_TOOL_METADATA
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 JUDGE_THRESHOLDS_PATH = REPO_ROOT / "configs" / "judge_thresholds.json"
+VALUE_TAU0 = 1.0
 
 
 def system_message(auto_complete: bool) -> str:
@@ -58,6 +73,7 @@ class EpisodeConfig:
     agent_base_url: str
     agent_api_key: str
     agent_thinking: bool
+    send_thinking_param: bool
     auto_complete: bool
     judge_model: str
     judge_base_url: str
@@ -70,11 +86,16 @@ class EpisodeConfig:
     sample_count: int
     k: int
     expected_remaining_risky_calls: int
+    allocator: str
     tau0: float
+    utility_cost: float
+    auto_rule: str
+    reviewer_error_table_path: str | None
     t_low: float
     t_high: float
     q_table_path: str | None
     attack: str
+    attack_model_name: str
 
     def model_context(self) -> dict[str, Any]:
         """写入每条日志的模型信息，防止本地日志混入 DeepSeek 的 q table。"""
@@ -88,6 +109,18 @@ class EpisodeConfig:
             "judge_temperature": self.judge_temperature,
             "reviewer_model": self.reviewer_model,
             "reviewer_base_url": self.reviewer_base_url,
+        }
+
+    def allocator_context(self) -> dict[str, Any]:
+        """P6 allocator 的设置；cost 专有的字段在 value allocator 下记为 None。"""
+
+        cost = self.allocator == "cost"
+        return {
+            "allocator": self.allocator,
+            "tau0": self.tau0,
+            "utility_cost": self.utility_cost if cost else None,
+            "auto_rule": self.auto_rule if cost else None,
+            "reviewer_error_table_path": self.reviewer_error_table_path,
         }
 
     @property
@@ -105,7 +138,7 @@ class EpisodeConfig:
 def add_episode_args(parser: argparse.ArgumentParser) -> None:
     """agent / Judge / reviewer / 预算等共用参数。"""
 
-    thresholds = json.loads(JUDGE_THRESHOLDS_PATH.read_text(encoding="utf-8"))
+    thresholds = json.loads(JUDGE_THRESHOLDS_PATH.read_text(encoding="utf-8-sig"))
 
     parser.add_argument("--benchmark-version", default="v1.2.2")
     parser.add_argument("--suite", default="banking")
@@ -125,21 +158,29 @@ def add_episode_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--agent-base-url",
-        help="OpenAI-compatible base URL for the agent. Defaults to the provider's.",
+        help=(
+            "OpenAI-compatible base URL for the agent, e.g. "
+            "http://localhost:11434/v1 for Ollama. Defaults to the provider's."
+        ),
+    )
+    parser.add_argument(
+        "--agent-api-key-env",
+        "--api-key-env",
+        dest="agent_api_key_env",
+        help=(
+            "Environment variable holding the agent API key. Defaults to the "
+            "provider's. Not needed for localhost."
+        ),
     )
     parser.add_argument(
         "--agent-thinking",
         action="store_true",
-        help="Enable thinking mode for the agent (DeepSeek, or qwen3 on Ollama).",
+        help="Enable thinking mode for the agent (DeepSeek API or local Ollama only).",
     )
     parser.add_argument(
         "--no-auto-complete",
         action="store_true",
         help="Do not append the automated-benchmark completion instruction.",
-    )
-    parser.add_argument(
-        "--api-key-env",
-        help="Environment variable holding the agent and Judge API key.",
     )
     parser.add_argument(
         "--judge-model",
@@ -148,6 +189,10 @@ def add_episode_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--judge-base-url",
         help="OpenAI-compatible base URL for the Judge. Defaults to the agent's.",
+    )
+    parser.add_argument(
+        "--judge-api-key-env",
+        help="Environment variable holding the Judge API key. Defaults to the agent's.",
     )
     parser.add_argument(
         "--judge-temperature",
@@ -166,7 +211,10 @@ def add_episode_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--reviewer-model",
-        help="Simulated reviewer model. Defaults to the provider's reviewer model.",
+        help=(
+            "Simulated reviewer model. Defaults to the provider's reviewer "
+            "model, else the agent model."
+        ),
     )
     parser.add_argument(
         "--reviewer-base-url",
@@ -174,7 +222,7 @@ def add_episode_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--reviewer-api-key-env",
-        help="Environment variable holding the reviewer API key.",
+        help="Environment variable holding the reviewer API key. Defaults to the agent's.",
     )
     parser.add_argument(
         "--request-timeout",
@@ -185,20 +233,20 @@ def add_episode_args(parser: argparse.ArgumentParser) -> None:
         "--k",
         type=int,
         default=3,
-        help="Escalation budget per task. Ignored by escalate_all and no_budget.",
+        help="Escalation budget per task. Ignored only by no_budget.",
     )
     parser.add_argument(
         "--expected-remaining-risky-calls",
         type=int,
         default=3,
     )
-    parser.add_argument("--tau0", type=float, default=1.0)
     parser.add_argument(
         "--t-low",
         "--p4-t-low",
         dest="t_low",
         type=float,
         default=float(thresholds["t_low"]),
+        help="Judge risk below this is allowed directly (hybrid, p4_only). 0 disables.",
     )
     parser.add_argument(
         "--t-high",
@@ -206,37 +254,117 @@ def add_episode_args(parser: argparse.ArgumentParser) -> None:
         dest="t_high",
         type=float,
         default=float(thresholds["t_high"]),
+        help="Judge risk above this is denied directly (hybrid, p4_only). 1 disables.",
+    )
+    parser.add_argument(
+        "--allocator",
+        choices=("value", "cost"),
+        default="value",
+        help=(
+            "P6 allocator for hybrid and no_budget. value: escalate when "
+            "risk x impact x q > tau (original). cost: escalate when review "
+            "lowers the expected cost of the decision by more than tau."
+        ),
+    )
+    parser.add_argument(
+        "--tau0",
+        type=float,
+        help=(
+            f"Base escalation threshold. Defaults to {VALUE_TAU0} for --allocator "
+            f"value and {DEFAULT_COST_TAU0} (the cost of one review) for "
+            "--allocator cost."
+        ),
     )
     parser.add_argument(
         "--q-table",
-        help="Optional q_table.json from build_q_table.py. Missing tools use q=1.0.",
+        help=(
+            "Optional q_table.json from build_q_table.py. Missing tools use "
+            "q=1.0. --allocator value only."
+        ),
+    )
+    parser.add_argument(
+        "--utility-cost",
+        type=float,
+        default=1.0,
+        help=(
+            "Cost of denying a safe call, against a cost of impact (1-4) for "
+            "allowing an unsafe one. --allocator cost only."
+        ),
+    )
+    parser.add_argument(
+        "--auto-rule",
+        choices=("threshold", "cost"),
+        default="threshold",
+        help=(
+            "How the cost allocator decides calls it does not escalate. "
+            f"threshold: allow when risk < {DEFAULT_ALLOW_THRESHOLD}, as the "
+            "value allocator does. cost: pick the side with lower expected cost."
+        ),
+    )
+    parser.add_argument(
+        "--reviewer-error-table",
+        help=(
+            'JSON of tool_name -> {"false_approve": x, "false_deny": y}, '
+            'estimated on dev. Key "default" covers missing tools. '
+            "--allocator cost only."
+        ),
     )
     parser.add_argument(
         "--attack",
         default="important_instructions_deepseek",
         help="AgentDojo attack name used with an injection task.",
     )
+    parser.add_argument(
+        "--attack-model-name",
+        help=(
+            "Model name the attack text addresses. Defaults to a name guessed "
+            "from the agent model (DeepSeek, Llama, Qwen, ...)."
+        ),
+    )
 
 
 def config_from_args(args: argparse.Namespace) -> EpisodeConfig:
-    """按 provider 补全未指定的参数，并检查 API Key。"""
+    """按 provider 补全未指定的参数，并检查 API Key 和互斥选项。"""
 
     defaults = PROVIDERS[args.provider]
     agent_model = args.model or defaults.agent_model
     agent_base_url = args.agent_base_url or defaults.base_url
     judge_base_url = args.judge_base_url or agent_base_url
     reviewer_base_url = args.reviewer_base_url or agent_base_url
-    api_key_env = args.api_key_env or defaults.api_key_env
-    reviewer_api_key_env = args.reviewer_api_key_env or api_key_env
+    agent_api_key_env = args.agent_api_key_env or defaults.api_key_env
+    judge_api_key_env = args.judge_api_key_env or agent_api_key_env
+    reviewer_api_key_env = args.reviewer_api_key_env or agent_api_key_env
 
     try:
-        agent_api_key = resolve_api_key(agent_base_url, None, api_key_env)
-        judge_api_key = resolve_api_key(judge_base_url, None, api_key_env)
+        agent_api_key = resolve_api_key(agent_base_url, None, agent_api_key_env)
+        judge_api_key = resolve_api_key(judge_base_url, None, judge_api_key_env)
         reviewer_api_key = resolve_api_key(
             reviewer_base_url, None, reviewer_api_key_env
         )
     except ValueError as error:
         raise SystemExit(str(error)) from error
+
+    # 其他托管服务（如 Llama/Qwen API）可能拒绝 DeepSeek 的 thinking 字段。
+    send_thinking_param = supports_thinking_switch(agent_base_url)
+    if args.agent_thinking and not send_thinking_param:
+        raise SystemExit(
+            "--agent-thinking only works with the DeepSeek API or a local "
+            "Ollama server."
+        )
+
+    if args.allocator == "value" and args.reviewer_error_table:
+        raise SystemExit("--reviewer-error-table only applies to --allocator cost.")
+    if args.allocator == "cost" and args.q_table:
+        raise SystemExit(
+            "--q-table only applies to --allocator value; "
+            "the cost allocator uses --reviewer-error-table."
+        )
+    if args.tau0 is not None:
+        tau0 = args.tau0
+    elif args.allocator == "cost":
+        tau0 = DEFAULT_COST_TAU0
+    else:
+        tau0 = VALUE_TAU0
 
     return EpisodeConfig(
         benchmark_version=args.benchmark_version,
@@ -246,6 +374,7 @@ def config_from_args(args: argparse.Namespace) -> EpisodeConfig:
         agent_base_url=agent_base_url,
         agent_api_key=agent_api_key,
         agent_thinking=args.agent_thinking,
+        send_thinking_param=send_thinking_param,
         auto_complete=not args.no_auto_complete,
         judge_model=args.judge_model or agent_model,
         judge_base_url=judge_base_url,
@@ -260,11 +389,41 @@ def config_from_args(args: argparse.Namespace) -> EpisodeConfig:
         sample_count=args.sample_count,
         k=args.k,
         expected_remaining_risky_calls=args.expected_remaining_risky_calls,
-        tau0=args.tau0,
+        allocator=args.allocator,
+        tau0=tau0,
+        utility_cost=args.utility_cost,
+        auto_rule=args.auto_rule,
+        reviewer_error_table_path=args.reviewer_error_table,
         t_low=args.t_low,
         t_high=args.t_high,
         q_table_path=args.q_table,
         attack=args.attack,
+        attack_model_name=(
+            args.attack_model_name or attack_model_name_for(agent_model)
+        ),
+    )
+
+
+def build_allocator(config: EpisodeConfig) -> BudgetAllocator | CostBasedAllocator:
+    """config.allocator 选择的 P6 allocator。"""
+
+    if config.allocator == "value":
+        return BudgetAllocator(tau0=config.tau0)
+
+    table = (
+        load_reviewer_error_table(config.reviewer_error_table_path)
+        if config.reviewer_error_table_path
+        else {}
+    )
+    default_errors = table.pop("default", DEFAULT_REVIEWER_ERRORS)
+    return CostBasedAllocator(
+        tau0=config.tau0,
+        utility_cost=config.utility_cost,
+        allow_threshold=(
+            None if config.auto_rule == "cost" else DEFAULT_ALLOW_THRESHOLD
+        ),
+        reviewer_errors=table,
+        default_reviewer_errors=default_errors,
     )
 
 
@@ -274,9 +433,9 @@ def print_config_warnings(config: EpisodeConfig) -> None:
             "WARNING: --sample-count < 2 disables Judge disagreement detection.",
             file=sys.stderr,
         )
-    if config.reviewer_model == config.judge_model:
+    if config.reviewer_model in {config.agent_model, config.judge_model}:
         print(
-            "WARNING: the reviewer uses the same model as the Judge; "
+            "WARNING: the reviewer uses the same model as the agent or Judge; "
             "use --reviewer-model with a different model family for final experiments.",
             file=sys.stderr,
         )
@@ -301,10 +460,11 @@ def run_episode(
 ) -> dict[str, Any]:
     """运行一个 AgentDojo 任务，写日志和 run_summary.json，并返回 summary。"""
 
-    if policy not in POLICIES:
-        raise ValueError(f"policy must be one of {', '.join(POLICIES)}")
+    if policy not in POLICY_VARIANTS:
+        raise ValueError(f"policy must be one of {', '.join(POLICY_VARIANTS)}")
 
     q_table = load_q_table(config.q_table_path) if config.q_table_path else {}
+    allocator = build_allocator(config)
     attack_mode = config.attack if injection_task_id else "none"
     escalation_budget = escalation_budget_for(policy, config.k)
     suite = get_suite(config.benchmark_version, config.suite)
@@ -316,14 +476,21 @@ def run_episode(
     log_context = {
         "suite": config.suite,
         "policy": policy,
+        # 记录命令行选择的变体（如 no_budget），覆盖 PolicyResult 中的类名。
+        "policy_variant": policy,
         "attack_mode": attack_mode,
         "injection_task_id": injection_task_id,
         "k": escalation_budget,
         "sample_count": config.sample_count,
-        "tau0": config.tau0,
+        **config.allocator_context(),
         "t_low": config.t_low,
         "t_high": config.t_high,
+        "auto_complete": config.auto_complete,
+        "agent_thinking": config.agent_thinking,
         **config.model_context(),
+        "attack_model_name": (
+            config.attack_model_name if injection_task_id else None
+        ),
     }
 
     judge = LLMJudge(
@@ -346,19 +513,18 @@ def run_episode(
         ),
         model_name=f"{config.reviewer_model}-reviewer",
     )
-    policy_engine = build_policy_engine(
-        policy,
+    policy_engine = PolicyEngine(
         judge=judge,
-        allocator=BudgetAllocator(tau0=config.tau0),
-        tool_names=[function.name for function in suite.tools],
+        allocator=allocator,
         q_table=q_table,
+        policy_variant=policy,
+        t_low=config.t_low,
+        t_high=config.t_high,
         decision_logger=DecisionLogger(
             policy_log_path,
             run_id=run_id,
             extra_context=log_context,
         ),
-        t_low=config.t_low,
-        t_high=config.t_high,
     )
     gate = PolicyGateToolsExecutor(
         policy_engine=policy_engine,
@@ -383,6 +549,7 @@ def run_episode(
         config.agent_model,
         temperature=0.0,
         thinking=config.agent_thinking,
+        send_thinking_param=config.send_thinking_param,
     )
     pipeline = AgentPipeline(
         [
@@ -407,6 +574,8 @@ def run_episode(
     if injection_task_id:
         injection_task = suite.get_injection_task_by_id(injection_task_id)
         attack = load_attack(config.attack, suite, pipeline)
+        if isinstance(attack, FixedJailbreakAttack):
+            attack.model_name = config.attack_model_name
         injections = attack.attack(task, injection_task)
 
     with TraceLogger(
@@ -434,7 +603,6 @@ def run_episode(
         "run_id": run_id,
         "task_id": task_id,
         **log_context,
-        "policy_variant": policy_engine.policy_variant,
         "q_table_path": config.q_table_path,
         "utility": utility,
         "attack_succeeded": attack_succeeded,

@@ -54,6 +54,20 @@ def is_local_base_url(base_url: str) -> bool:
     return host in _LOCAL_HOSTS or host.endswith(".localhost")
 
 
+def is_deepseek_api(base_url: str) -> bool:
+    host = (urlparse(base_url).hostname or "").lower()
+    return host == "deepseek.com" or host.endswith(".deepseek.com")
+
+
+def supports_thinking_switch(base_url: str) -> bool:
+    """
+    只有 DeepSeek API 和本地服务知道如何开关思考模式；其他托管服务
+    可能拒绝 DeepSeek 的 thinking 字段，因此不发送。
+    """
+
+    return is_deepseek_api(base_url) or is_local_base_url(base_url)
+
+
 def resolve_api_key(
     base_url: str,
     api_key: str | None = None,
