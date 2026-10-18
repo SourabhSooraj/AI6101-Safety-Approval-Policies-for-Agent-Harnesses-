@@ -8,14 +8,21 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from harness.budget_allocator import DEFAULT_ALLOW_THRESHOLD
-from harness.q_estimator import estimate_q_table
+from harness.q_estimator import estimate_q_table, models_in_logs
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Estimate q_table from dev JSONL logs."
     )
-    parser.add_argument("log_path", help="Path to dev decisions JSONL.")
+    parser.add_argument(
+        "log_paths",
+        nargs="+",
+        help=(
+            "reviewer_decisions.jsonl files, or folders (such as a batch folder) "
+            "searched recursively for them."
+        ),
+    )
     parser.add_argument(
         "--group-by",
         default="tool_name",
@@ -37,17 +44,40 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--allow-mixed-models",
+        action="store_true",
+        help=(
+            "Allow logs from different Judge/reviewer models. Off by default so "
+            "local Ollama logs never end up in a DeepSeek q table."
+        ),
+    )
+    parser.add_argument(
         "--output",
         help="Optional JSON output path. Prints to stdout when omitted.",
     )
     args = parser.parse_args()
+    log_paths = expand_log_paths(args.log_paths)
+    if not log_paths:
+        raise SystemExit("No reviewer_decisions.jsonl files found.")
 
-    q_table = estimate_q_table(
-        args.log_path,
-        group_by=args.group_by,
-        baseline_threshold=args.baseline_threshold,
-        min_samples=args.min_samples,
-    )
+    try:
+        q_table = estimate_q_table(
+            log_paths,
+            group_by=args.group_by,
+            baseline_threshold=args.baseline_threshold,
+            min_samples=args.min_samples,
+            allow_mixed_models=args.allow_mixed_models,
+        )
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
+    for judge_model, reviewer_model in sorted(
+        models_in_logs(log_paths), key=str
+    ):
+        print(
+            f"logs include judge_model={judge_model} "
+            f"reviewer_model={reviewer_model}",
+            file=sys.stderr,
+        )
     serialized = json.dumps(q_table, indent=2, sort_keys=True)
 
     if args.output:
@@ -57,6 +87,17 @@ def main() -> None:
         print(f"Wrote {len(q_table)} q values to {output_path}")
     else:
         print(serialized)
+
+
+def expand_log_paths(paths: list[str]) -> list[Path]:
+    expanded: list[Path] = []
+    for raw_path in paths:
+        path = Path(raw_path)
+        if path.is_dir():
+            expanded.extend(sorted(path.rglob("reviewer_decisions.jsonl")))
+        else:
+            expanded.append(path)
+    return expanded
 
 
 if __name__ == "__main__":

@@ -11,17 +11,27 @@ from agentdojo.functions_runtime import EmptyEnv, Env, FunctionsRuntime
 from agentdojo.types import ChatMessage
 
 from .cost import TokenUsage, usage_from_openai_response
+from .llm_providers import strip_think, thinking_switch
 
 
-def _message_to_deepseek(message: ChatMessage, model_name: str):
+def _message_to_deepseek(
+    message: ChatMessage,
+    model_name: str,
+    disable_thinking: bool = True,
+):
     """DeepSeek Chat Completions 使用 system，而不是 developer role。"""
 
     role = message["role"]
     if role == "system":
-        return {
-            "role": "system",
-            "content": _content_blocks_to_openai_content_blocks(message),
-        }
+        content = _content_blocks_to_openai_content_blocks(message)
+        switch = thinking_switch(model_name) if disable_thinking else ""
+        if switch and content:
+            # qwen3（Ollama）：在 system prompt 末尾关闭思考模式，节省本地推理时间。
+            content = [
+                *content[:-1],
+                {**content[-1], "text": content[-1]["text"] + switch},
+            ]
+        return {"role": "system", "content": content}
     if role == "user":
         return {
             "role": "user",
@@ -55,6 +65,10 @@ def _message_to_deepseek(message: ChatMessage, model_name: str):
 
 def _openai_to_deepseek_assistant(message):
     output = _openai_to_assistant_message(message)
+    # 本地推理模型可能把 <think> 段落写在 content 里，不写回对话历史。
+    for block in output["content"] or []:
+        if block.get("type") == "text" and block.get("content"):
+            block["content"] = strip_think(block["content"])
     reasoning_content = getattr(message, "reasoning_content", None)
     if reasoning_content:
         output["reasoning_content"] = reasoning_content
@@ -62,7 +76,7 @@ def _openai_to_deepseek_assistant(message):
 
 
 class DeepSeekAgentLLM(OpenAILLM):
-    """AgentDojo OpenAILLM 的 DeepSeek 兼容版本。"""
+    """AgentDojo OpenAILLM 的 DeepSeek / Ollama 兼容版本。"""
 
     def __init__(
         self,
@@ -96,7 +110,11 @@ class DeepSeekAgentLLM(OpenAILLM):
             extra_args = {}
 
         openai_messages = [
-            _message_to_deepseek(message, self.model)
+            _message_to_deepseek(
+                message,
+                self.model,
+                disable_thinking=not self.thinking,
+            )
             for message in messages
         ]
         openai_tools = [

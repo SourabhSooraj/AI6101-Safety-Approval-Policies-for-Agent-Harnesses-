@@ -18,7 +18,10 @@ def _parse_output(output: str, key: str) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Compare P1-only, P4-only, and Hybrid policies."
+        description=(
+            "Compare P1-only, P4-only, and Hybrid policies. Other options, such "
+            "as --provider ollama, are passed on to run_agentdojo_e2e.py."
+        )
     )
     parser.add_argument(
         "--policies",
@@ -29,7 +32,7 @@ def main() -> None:
     parser.add_argument("--k-values", nargs="+", type=int, default=[0, 3])
     parser.add_argument("--task-ids", nargs="+", default=["user_task_0"])
     parser.add_argument("--sample-count", type=int, default=1)
-    args = parser.parse_args()
+    args, runner_args = parser.parse_known_args()
 
     failures = 0
     for policy in args.policies:
@@ -46,6 +49,7 @@ def main() -> None:
                     task_id,
                     "--sample-count",
                     str(args.sample_count),
+                    *runner_args,
                 ]
                 result = subprocess.run(
                     command,

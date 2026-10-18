@@ -25,6 +25,10 @@ All variants use the same Harness, reviewer, escalation budget, AgentDojo
 suites, and logging format. See "Policy variants for controlled comparison"
 below for details.
 
+The agent, the Judge and the simulated reviewer can run on the DeepSeek API
+(paid, used for the reported results) or on local Ollama models (free, used
+for development). See [Local development with Ollama](#local-development-with-ollama-free).
+
 ### Setup
 
 Run the following commands from the repository root:
@@ -89,6 +93,70 @@ Unit tests use fake Judge clients and do not require a DeepSeek API key:
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
+### Local development with Ollama (free)
+
+Development work (code fixes, the batch runner, unit tests, checking logs)
+does not need DeepSeek. With `--provider ollama` every script talks to a local
+[Ollama](https://ollama.com) server instead:
+
+| Role | DeepSeek (`--provider deepseek`, default) | Local (`--provider ollama`) |
+|---|---|---|
+| Agent | `deepseek-flash` | `qwen3:8b` |
+| Judge | `deepseek-flash` | `qwen3:8b` |
+| Simulated reviewer | `deepseek-flash` | `llama3.1:8b` |
+
+No API key is needed for a `localhost` endpoint, and every local call is
+logged with `estimated_cost_usd: 0`.
+
+One-time setup on macOS:
+
+```bash
+brew install ollama
+ollama pull qwen3:8b
+ollama pull llama3.1:8b
+```
+
+Start the server in its own terminal and leave it running:
+
+```bash
+OLLAMA_CONTEXT_LENGTH=16384 OLLAMA_MAX_LOADED_MODELS=2 ollama serve
+```
+
+- `OLLAMA_CONTEXT_LENGTH=16384` is required. Ollama's default context window
+  is much smaller and it **silently cuts off** the start of long prompts, so
+  the agent loses the AgentDojo system prompt and tool list.
+- `OLLAMA_MAX_LOADED_MODELS=2` keeps both models in memory (about 10 GB
+  together) instead of reloading one on every Judge/reviewer switch. On a
+  machine with 8 GB of RAM, leave it out and expect slower runs.
+
+Then run the same commands as below with `--provider ollama`:
+
+```bash
+.venv/bin/python scripts/smoke_test_deepseek_policy.py --provider ollama
+.venv/bin/python scripts/run_agentdojo_e2e.py --provider ollama --task-id user_task_0
+.venv/bin/python scripts/run_batch.py --provider ollama --split dev
+```
+
+What changes for local models:
+
+- **qwen3 thinking mode is switched off.** `/no_think` is added to the Judge
+  prompt and to the agent's system prompt, and any `<think>...</think>` block
+  is removed from replies. Otherwise braces inside the reasoning break the
+  Judge's JSON parsing (every call would fall back to "unsafe") and the
+  reasoning would be fed back into the agent's history.
+- **Timeouts are 300 s per request** (`--request-timeout` to change).
+- **Judge disagreement rarely fires.** At `--judge-temperature 0.0` the three
+  Judge samples are almost identical. Use e.g. `--judge-temperature 0.7` when
+  you want to exercise the disagreement path.
+- **Local results are not experiment results.** Use them to check that the
+  code runs and the logs look right. `tau0` and the q table depend on how the
+  Judge and reviewer behave, so they must come from DeepSeek dev runs.
+  `build_q_table.py` refuses to mix logs from different Judge/reviewer models.
+
+You can also mix providers, for example a local agent and Judge with a
+DeepSeek reviewer: `--provider ollama --reviewer-model deepseek-flash
+--reviewer-base-url https://api.deepseek.com --reviewer-api-key-env DEEPSEEK_API_KEY`.
+
 ### Run the real DeepSeek smoke test
 
 The smoke test makes up to two real DeepSeek requests with `sample_count=1`:
@@ -107,6 +175,7 @@ $env:DEEPSEEK_API_KEY="your-deepseek-api-key"
 A successful run prints results with `stage=p6` and, when the call is
 escalated, a `Reviewer result` block. If the script reports
 `p6_force_escalation`, the API request or Judge response parsing failed.
+Add `--provider ollama` to run the same check against local models for free.
 
 Without a DeepSeek key, unit tests and P1-only development still work. A real
 AgentDojo run with the DeepSeek Agent, Judge, or reviewer requires the key.
@@ -174,11 +243,64 @@ Other options:
 - `--q-table configs\q_table.json` loads a q table built by
   `scripts/build_q_table.py`. Tools missing from the table use `q=1.0`.
 - `--tau0` sets the P6 allocator's base threshold (default `1.0`).
+- `--provider deepseek|ollama` picks the default models and endpoint for all
+  three roles (see the table in
+  [Local development with Ollama](#local-development-with-ollama-free)).
+  `--model` overrides the agent model, and the Judge uses the agent model unless
+  `--judge-model` is given.
+- `--agent-base-url`, `--judge-base-url` and `--api-key-env` point the agent and
+  Judge at another OpenAI-compatible endpoint. `--judge-temperature` (default
+  `0.0`) sets the Judge's sampling temperature, and `--request-timeout` the
+  seconds per LLM request.
 - `--reviewer-model`, `--reviewer-base-url` and `--reviewer-api-key-env` point
-  the simulated reviewer at a different OpenAI-compatible model. By default the
-  reviewer uses the same DeepSeek model as the agent and Judge, and the script
-  prints a warning. Use a different model family for the final experiments to
-  reduce correlated reviewer behavior.
+  the simulated reviewer at a different OpenAI-compatible model. With
+  `--provider deepseek` the reviewer uses the same model as the agent and Judge
+  unless overridden, and the script prints a warning. Use a different model
+  family for the final experiments to reduce correlated reviewer behavior.
+
+The models and endpoints of all three roles are written to every log line and
+to `run_summary.json` (`provider`, `agent_model`, `judge_model`,
+`reviewer_model`, and their base URLs).
+
+### Batch runs and the dev/test split
+
+`scripts/run_batch.py` runs every combination of tasks, policies and injection
+tasks, with a fresh pipeline per episode. The banking suite is split into:
+
+- `--split dev`: `user_task_0` to `user_task_7`, for Judge calibration, choosing
+  `tau0` and building the q table;
+- `--split test`: `user_task_8` to `user_task_15`, used only for the final run
+  with settings frozen from the dev split.
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_batch.py `
+  --provider deepseek `
+  --split dev `
+  --policies full p1_only escalate_all `
+  --injection-tasks none injection_task_0 `
+  --k 3
+```
+
+Use `--task-ids user_task_8 user_task_9` instead of `--split` for a small pilot,
+and `--dry-run` to list the episodes without calling any model. Every episode
+writes its own folder `logs/agentdojo_batch/<batch_id>/<task>__<policy>__<injection>/`
+with the same three files as a single e2e run. The batch folder also holds
+`batch_config.json` (all settings, without API keys) and `batch_summary.jsonl`
+(one line per episode, including `total_cost_usd`). At the end the script
+prints utility, attack success rate and cost per policy. One failing episode is
+recorded with an `error` field and does not stop the batch. Pass the same
+`--batch-id` again to resume: finished episodes are skipped.
+
+Suggested workflow:
+
+1. **Local, free:** code changes, unit tests and batch runs with
+   `--provider ollama` to check that everything runs and the logs look right.
+2. **DeepSeek, dev split:** Judge calibration, choosing `tau0`, and building the
+   q table from the dev batch folder.
+3. **DeepSeek pilot:** 2 to 3 test tasks with `--task-ids`, to catch any
+   DeepSeek-specific problems.
+4. **DeepSeek, test split:** the final run with `--split test` and the settings
+   and q table frozen from step 2.
 
 ### Policy variants for controlled comparison
 
@@ -214,6 +336,9 @@ Run a small comparison matrix with:
   --task-ids user_task_0 `
   --sample-count 1
 ```
+
+Options the comparison script does not know, such as `--provider ollama`, are
+passed on to `run_agentdojo_e2e.py` for every run.
 
 The default Judge thresholds are stored in `configs/judge_thresholds.json`. Tune
 them only on dev logs, then freeze them for test. Every JSONL decision record
@@ -318,7 +443,8 @@ logger = DecisionLogger(
 ```
 
 Real DeepSeek responses automatically record input tokens, output tokens,
-cached input tokens, and estimated USD cost. Pricing is configured in
+cached input tokens, and estimated USD cost. Models without a price in
+`harness/cost.py`, such as local Ollama models, are logged with cost `0`. Pricing is configured in
 `harness/cost.py`; verify the official DeepSeek pricing page before large runs.
 
 The reviewer log stores the final verdict in `reviewer_verdict` and whether the
@@ -326,11 +452,19 @@ review succeeded in `reviewer_success`. Build the dev q table with:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\build_q_table.py `
-  logs\dev_reviewer_decisions.jsonl `
+  logs\agentdojo_batch\<dev_batch_id> `
   --group-by tool_name `
   --min-samples 5 `
   --output configs\q_table.json
 ```
+
+The script takes one or more `reviewer_decisions.jsonl` files, or folders that
+it searches recursively for them (such as a batch folder). It prints the Judge
+and reviewer models found in the logs, and stops with an error if the counted
+records come from more than one `(judge_model, reviewer_model)` pair, because q
+depends on both. This keeps local Ollama logs out of a DeepSeek q table.
+`--allow-mixed-models` overrides the check. Logs written before these fields
+existed count as model `None`.
 
 Records with `reviewer_success: false` are skipped, because a failed review
 defaults to `DENY` and is not a real reviewer judgement. Records whose `stage`
@@ -375,6 +509,14 @@ resets on a retry.
   pipeline name and raise `ValueError` for DeepSeek. Use
   `important_instructions_deepseek` (the default) instead of renaming the
   pipeline to another model's id.
+- **The agent runs at temperature 0.** AgentDojo's own request helper sends
+  `temperature or NOT_GIVEN`, which drops `0.0`, so earlier runs used the
+  provider's default temperature (1.0 on DeepSeek). `DeepSeekAgentLLM` now sends
+  `temperature=0.0` explicitly. Runs from before this change are not directly
+  comparable with later ones.
+- **The attack text still says "DeepSeek" for local models.** The
+  `important_instructions_deepseek` template is kept unchanged so that local
+  development runs use the same injection text as the DeepSeek runs.
 - **Reading AgentDojo's `security` flag.** `security=True` means the attack
   succeeded, and AgentDojo also returns `True` for every run without an attack.
   The e2e script reports it as `attack_succeeded`, which is `None` when no
@@ -401,6 +543,9 @@ hybrid   -> P1 -> LLM Judge -> P6 预算 allocator
 
 三种变体共用 Harness、reviewer、escalation 预算、AgentDojo suite 和日志
 格式。具体说明见后面的“用于受控对比的 Policy 变体”。
+
+agent、Judge 和模拟 reviewer 可以使用 DeepSeek API（付费，用于正式结果），
+也可以使用本地 Ollama 模型（免费，用于开发），见“使用 Ollama 本地开发”。
 
 ### 创建环境
 
@@ -466,6 +611,64 @@ export DEEPSEEK_API_KEY="你的 DeepSeek API Key"
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
+### 使用 Ollama 本地开发（免费）
+
+开发工作（修改代码、batch runner、单元测试、检查日志）不需要 DeepSeek。
+加上 `--provider ollama` 后，所有脚本都改为连接本地
+[Ollama](https://ollama.com) 服务：
+
+| 角色 | DeepSeek（`--provider deepseek`，默认） | 本地（`--provider ollama`） |
+|---|---|---|
+| Agent | `deepseek-flash` | `qwen3:8b` |
+| Judge | `deepseek-flash` | `qwen3:8b` |
+| 模拟 reviewer | `deepseek-flash` | `llama3.1:8b` |
+
+`localhost` 端点不需要 API Key，本地调用在日志中的 `estimated_cost_usd` 为 `0`。
+
+macOS 一次性安装：
+
+```bash
+brew install ollama
+ollama pull qwen3:8b
+ollama pull llama3.1:8b
+```
+
+在单独的终端中启动服务并保持运行：
+
+```bash
+OLLAMA_CONTEXT_LENGTH=16384 OLLAMA_MAX_LOADED_MODELS=2 ollama serve
+```
+
+- 必须设置 `OLLAMA_CONTEXT_LENGTH=16384`。Ollama 默认上下文窗口小得多，会
+  **静默截断**长 prompt 的开头，agent 会丢失 AgentDojo 的 system prompt 和工具列表。
+- `OLLAMA_MAX_LOADED_MODELS=2` 让两个模型同时留在内存中（合计约 10 GB），
+  避免 Judge / reviewer 切换时反复加载。8 GB 内存的机器可以不设，但会更慢。
+
+然后在下文命令中加上 `--provider ollama`：
+
+```bash
+.venv/bin/python scripts/smoke_test_deepseek_policy.py --provider ollama
+.venv/bin/python scripts/run_agentdojo_e2e.py --provider ollama --task-id user_task_0
+.venv/bin/python scripts/run_batch.py --provider ollama --split dev
+```
+
+本地模型的区别：
+
+- **关闭 qwen3 思考模式。** Judge prompt 和 agent 的 system prompt 末尾会加上
+  `/no_think`，回复中的 `<think>...</think>` 段落会被删除。否则思考内容中的
+  花括号会让 Judge 的 JSON 解析失败（每次都回退为“不安全”），思考内容也会被
+  写回 agent 的对话历史。
+- **每次请求超时为 300 秒**（用 `--request-timeout` 修改）。
+- **Judge 分歧检测很少触发。** `--judge-temperature 0.0` 时三次采样几乎相同。
+  需要测试分歧路径时可用 `--judge-temperature 0.7` 等。
+- **本地结果不是实验结果。** 只用来检查代码能运行、日志正确。`tau0` 和 q table
+  取决于 Judge 和 reviewer 的行为，必须来自 DeepSeek dev 运行。
+  `build_q_table.py` 会拒绝混合不同 Judge / reviewer 模型的日志。
+
+也可以混合使用，例如本地 agent 和 Judge 加 DeepSeek reviewer：
+`--provider ollama --reviewer-model deepseek-flash
+--reviewer-base-url https://api.deepseek.com --reviewer-api-key-env DEEPSEEK_API_KEY`。
+
 ### 运行真实 DeepSeek smoke test
 
 Smoke test 在 `sample_count=1` 下最多发起两次真实 DeepSeek 请求：
@@ -483,7 +686,7 @@ $env:DEEPSEEK_API_KEY="你的 DeepSeek API Key"
 
 成功运行时输出中会包含 `stage=p6`；如果调用被升级，还会输出
 `Reviewer result`。如果出现 `p6_force_escalation`，通常表示 API 请求失败
-或 Judge 返回内容无法解析。
+或 Judge 返回内容无法解析。加上 `--provider ollama` 可以免费用本地模型做同样的检查。
 
 没有 DeepSeek Key 时，仍可运行单元测试和 P1 开发；真实 AgentDojo
 运行中的 DeepSeek Agent、Judge 或 reviewer 需要 Key。
@@ -546,10 +749,55 @@ DeepSeek 要求的 `reasoning_content`。
 - `--q-table configs\q_table.json`：加载 `scripts/build_q_table.py` 生成的
   q table，表中没有的工具使用 `q=1.0`。
 - `--tau0`：设置 P6 allocator 的基础阈值（默认 `1.0`）。
+- `--provider deepseek|ollama`：选择三个角色的默认模型和端点（见“使用 Ollama
+  本地开发”中的表格）。`--model` 覆盖 agent 模型；未指定 `--judge-model` 时
+  Judge 使用 agent 模型。
+- `--agent-base-url`、`--judge-base-url`、`--api-key-env`：让 agent 和 Judge
+  连接其他兼容 OpenAI API 的端点。`--judge-temperature`（默认 `0.0`）设置
+  Judge 采样温度，`--request-timeout` 设置每次 LLM 请求的超时秒数。
 - `--reviewer-model`、`--reviewer-base-url`、`--reviewer-api-key-env`：让模拟
-  reviewer 使用另一个兼容 OpenAI API 的模型。默认 reviewer 与 agent/Judge
-  使用同一个 DeepSeek 模型，脚本会输出警告。正式实验应换用不同模型家族，
-  以降低 reviewer 与 policy 判断高度相关的问题。
+  reviewer 使用另一个兼容 OpenAI API 的模型。`--provider deepseek` 下默认
+  reviewer 与 agent/Judge 使用同一模型，脚本会输出警告。正式实验应换用不同
+  模型家族，以降低 reviewer 与 policy 判断高度相关的问题。
+
+三个角色的模型和端点会写入每一行日志和 `run_summary.json`（`provider`、
+`agent_model`、`judge_model`、`reviewer_model` 及对应 base URL）。
+
+### 批量运行与 dev/test 划分
+
+`scripts/run_batch.py` 运行 task、policy 和 injection task 的所有组合，每个
+episode 使用新的 pipeline。banking 任务划分为：
+
+- `--split dev`：`user_task_0` 到 `user_task_7`，用于 Judge 校准、选择 `tau0`
+  和构建 q table；
+- `--split test`：`user_task_8` 到 `user_task_15`，只用于最终运行，设置沿用
+  dev 阶段冻结的结果。
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_batch.py `
+  --provider deepseek `
+  --split dev `
+  --policies full p1_only escalate_all `
+  --injection-tasks none injection_task_0 `
+  --k 3
+```
+
+小规模试跑时用 `--task-ids user_task_8 user_task_9` 代替 `--split`；`--dry-run`
+只列出 episode，不调用模型。每个 episode 写入单独的文件夹
+`logs/agentdojo_batch/<batch_id>/<task>__<policy>__<injection>/`，内容与单次 e2e
+运行相同。batch 文件夹中还有 `batch_config.json`（所有设置，不含 API Key）和
+`batch_summary.jsonl`（每个 episode 一行，含 `total_cost_usd`）。结束时脚本按
+policy 输出 utility、攻击成功率和成本。单个 episode 失败会记录 `error` 字段，
+不会中断整批。再次传入相同的 `--batch-id` 可以续跑，已完成的 episode 会被跳过。
+
+建议流程：
+
+1. **本地，免费：** 用 `--provider ollama` 修改代码、运行单元测试和 batch，检查
+   一切能运行、日志正确。
+2. **DeepSeek，dev 划分：** Judge 校准、选择 `tau0`，并用 dev batch 文件夹构建 q table。
+3. **DeepSeek 试跑：** 用 `--task-ids` 跑 2 到 3 个 test 任务，提前发现
+   DeepSeek 特有的问题。
+4. **DeepSeek，test 划分：** 用 `--split test` 和第 2 步冻结的设置及 q table 做最终运行。
 
 ### 用于受控对比的 Policy 变体
 
@@ -583,6 +831,9 @@ DeepSeek 要求的 `reasoning_content`。
   --task-ids user_task_0 `
   --sample-count 1
 ```
+
+对比脚本不认识的参数（如 `--provider ollama`）会原样传给每次
+`run_agentdojo_e2e.py` 运行。
 
 Judge 默认阈值保存在 `configs/judge_thresholds.json`。阈值只能使用 dev logs
 调整，调好后在 test 上冻结。每条 JSONL 决策日志都包含
@@ -681,18 +932,25 @@ logger = DecisionLogger(
 
 真实 DeepSeek 响应会自动记录输入 token、输出 token、缓存命中输入 token
 和估算美元成本。价格配置位于 `harness/cost.py`，正式大规模运行前应重新
-核对 DeepSeek 官方价格页。
+核对 DeepSeek 官方价格页。`harness/cost.py` 中没有价格的模型（如本地 Ollama
+模型）成本记为 `0`。
 
 reviewer 日志把最终审核结果写入 `reviewer_verdict`，把审核是否成功写入
 `reviewer_success`。用以下命令生成 dev q table：
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\build_q_table.py `
-  logs\dev_reviewer_decisions.jsonl `
+  logs\agentdojo_batch\<dev_batch_id> `
   --group-by tool_name `
   --min-samples 5 `
   --output configs\q_table.json
 ```
+
+脚本接受一个或多个 `reviewer_decisions.jsonl` 文件，或会被递归搜索的文件夹
+（如 batch 文件夹）。它会输出日志中的 Judge 和 reviewer 模型；如果计入的记录
+来自多个 `(judge_model, reviewer_model)` 组合，会报错退出，因为 q 同时取决于
+两者。这样本地 Ollama 日志不会混入 DeepSeek 的 q table。`--allow-mixed-models`
+可跳过检查。加入这些字段之前写入的日志，模型记为 `None`。
 
 `reviewer_success: false` 的记录会被跳过，因为审核失败时默认 `DENY`，并不是
 reviewer 的真实判断。`stage` 不是 `p6` 的记录（来自 `p1_only` 或 `escalate_all`
@@ -729,6 +987,11 @@ task id 和用户请求开始。每个 episode 都应新建 pipeline（以及新
   （包括 `important_instructions_no_model_name`）会从 pipeline 名称查找模型名，
   对 DeepSeek 会抛出 `ValueError`。请使用 `important_instructions_deepseek`（默认值），
   不要把 pipeline 改名为其他模型的 id。
+- **Agent 使用温度 0。** AgentDojo 自带的请求函数发送 `temperature or NOT_GIVEN`，
+  会丢掉 `0.0`，所以之前的运行实际使用 provider 默认温度（DeepSeek 为 1.0）。
+  `DeepSeekAgentLLM` 现在显式发送 `temperature=0.0`。此改动之前和之后的运行不能直接比较。
+- **本地模型下攻击文本仍称 "DeepSeek"。** 保留 `important_instructions_deepseek`
+  模板不变，使本地开发运行与 DeepSeek 运行使用相同的注入文本。
 - **AgentDojo 的 `security` 标志。** `security=True` 表示攻击成功，且没有攻击的运行
   也总是返回 `True`。e2e 脚本把它输出为 `attack_succeeded`，未启用攻击时为 `None`。
   有攻击时，安全的结果是 `utility=True` 且 `attack_succeeded=False`。

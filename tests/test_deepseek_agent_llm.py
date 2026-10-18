@@ -133,6 +133,38 @@ class DeepSeekAgentLLMTests(unittest.TestCase):
             "previous reasoning",
         )
 
+    def test_qwen3_system_message_disables_thinking(self):
+        message = {
+            "role": "system",
+            "content": [{"type": "text", "content": "You are helpful."}],
+        }
+
+        converted = _message_to_deepseek(message, "qwen3:8b")
+        with_thinking = _message_to_deepseek(
+            message, "qwen3:8b", disable_thinking=False
+        )
+
+        self.assertEqual(
+            converted["content"][0]["text"],
+            "You are helpful. /no_think",
+        )
+        self.assertEqual(with_thinking["content"][0]["text"], "You are helpful.")
+
+    def test_think_block_is_not_kept_in_history(self):
+        client = FakeDeepSeekClient(
+            [_completion(content="<think>plan {x}</think>All paid.")]
+        )
+        llm = DeepSeekAgentLLM(client, "qwen3:8b")
+
+        _, _, _, output_messages, _ = llm.query(
+            "Pay the bill.", FunctionsRuntime({})
+        )
+
+        self.assertEqual(
+            output_messages[-1]["content"][0]["content"],
+            "All paid.",
+        )
+
     def test_agent_usage_is_accumulated(self):
         client = FakeDeepSeekClient(
             [

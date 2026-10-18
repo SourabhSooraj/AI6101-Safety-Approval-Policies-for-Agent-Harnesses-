@@ -1,3 +1,4 @@
+import argparse
 import sys
 from pathlib import Path
 
@@ -8,12 +9,27 @@ if str(REPO_ROOT) not in sys.path:
 from harness.budget_allocator import BudgetAllocator
 from harness.deepseek_judge_client import DeepSeekJudgeClient
 from harness.llm_judge import LLMJudge
+from harness.llm_providers import PROVIDERS
 from harness.policy import Decision, PolicyRequest, ToolMetadata
 from harness.policy_engine import PolicyEngine
 from harness.simulated_reviewer import SimulatedReviewer
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="One Judge call and at most one reviewer call, end to end."
+    )
+    parser.add_argument(
+        "--provider",
+        choices=sorted(PROVIDERS),
+        default="deepseek",
+        help="deepseek (paid API) or ollama (local qwen3:8b / llama3.1:8b).",
+    )
+    args = parser.parse_args()
+    provider = PROVIDERS[args.provider]
+    judge_model = provider.agent_model
+    reviewer_model = provider.reviewer_model or judge_model
+
     metadata = ToolMetadata(
         name="send_money",
         side_effect="write",
@@ -34,8 +50,14 @@ def main() -> None:
     )
 
     judge = LLMJudge(
-        client=DeepSeekJudgeClient(model="deepseek-flash"),
+        client=DeepSeekJudgeClient(
+            model=judge_model,
+            base_url=provider.base_url,
+            api_key_env=provider.api_key_env,
+            timeout=provider.request_timeout,
+        ),
         sample_count=1,  # smoke test 只调用一次，完整实验再改为 3。
+        model_name=judge_model,
     )
     engine = PolicyEngine(
         judge=judge,
@@ -62,7 +84,7 @@ def main() -> None:
     # force_escalation 常见于 API 异常、JSON 解析失败或多次采样分歧。
     if result.policy_name == "p6_force_escalation":
         raise SystemExit(
-            "DeepSeek Judge failed or returned invalid/disagreeing output."
+            f"{judge_model} Judge failed or returned invalid/disagreeing output."
         )
     if result.stage != "p6":
         raise SystemExit("Policy did not reach the P6 allocator.")
@@ -72,8 +94,13 @@ def main() -> None:
         return
 
     reviewer = SimulatedReviewer(
-        client=DeepSeekJudgeClient(model="deepseek-flash"),
-        model_name="deepseek-flash-reviewer",
+        client=DeepSeekJudgeClient(
+            model=reviewer_model,
+            base_url=provider.base_url,
+            api_key_env=provider.api_key_env,
+            timeout=provider.request_timeout,
+        ),
+        model_name=f"{reviewer_model}-reviewer",
     )
     review_result = reviewer.review(
         request,
@@ -93,7 +120,9 @@ def main() -> None:
         )
 
     if not review_result.success:
-        raise SystemExit("DeepSeek reviewer failed or returned invalid output.")
+        raise SystemExit(
+            f"{reviewer_model} reviewer failed or returned invalid output."
+        )
 
 
 if __name__ == "__main__":
