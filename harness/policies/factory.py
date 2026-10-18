@@ -1,4 +1,4 @@
-from ..budget_allocator import BudgetAllocator
+from ..budget_allocator import Allocator
 from ..llm_judge import LLMJudge
 from .base import PolicyEvaluator
 from .baselines import AllowAllPolicy, EscalateAllPolicy
@@ -55,7 +55,7 @@ def escalation_budget_for(variant: str, k: int) -> int:
 def create_policy(
     variant: str,
     judge: LLMJudge | None = None,
-    allocator: BudgetAllocator | None = None,
+    allocator: Allocator | None = None,
     q_table: dict[str, float] | None = None,
     t_low: float = 0.3,
     t_high: float = 0.7,

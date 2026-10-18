@@ -1,6 +1,10 @@
 import unittest
 
-from scripts.run_policy_comparison import build_command, build_parser
+from scripts.run_policy_comparison import (
+    allocator_settings,
+    build_command,
+    build_parser,
+)
 
 
 class PolicyComparisonCommandTests(unittest.TestCase):
@@ -46,6 +50,49 @@ class PolicyComparisonCommandTests(unittest.TestCase):
         self.assertEqual(value_of("--injection-task"), "injection_task_1")
         self.assertNotIn("--agent-thinking", command)
 
+    def test_allocator_options_are_passed_through(self):
+        args = build_parser().parse_args(
+            [
+                "--utility-cost", "2",
+                "--auto-rule", "cost",
+                "--reviewer-error-table", "errors.json",
+            ]
+        )
+
+        command = build_command(
+            args, "hybrid", 1, "user_task_0", "none", "cost", 0.1
+        )
+
+        def value_of(option):
+            return command[command.index(option) + 1]
+
+        self.assertEqual(value_of("--allocator"), "cost")
+        self.assertEqual(value_of("--tau0"), "0.1")
+        self.assertEqual(value_of("--utility-cost"), "2")
+        self.assertEqual(value_of("--auto-rule"), "cost")
+        self.assertEqual(value_of("--reviewer-error-table"), "errors.json")
+
+    def test_sweep_covers_p6_policies_only(self):
+        args = build_parser().parse_args(
+            [
+                "--allocators", "value", "cost",
+                "--tau0-values", "0.05", "0.2",
+            ]
+        )
+
+        self.assertEqual(
+            allocator_settings(args, "hybrid"),
+            [("value", 0.05), ("value", 0.2), ("cost", 0.05), ("cost", 0.2)],
+        )
+        self.assertEqual(allocator_settings(args, "p1_only"), [(None, None)])
+
+    def test_no_sweep_keeps_runner_defaults(self):
+        args = build_parser().parse_args([])
+
+        self.assertEqual(allocator_settings(args, "hybrid"), [(None, None)])
+        command = build_command(args, "hybrid", 1, "user_task_0", "none")
+        self.assertNotIn("--allocator", command)
+        self.assertNotIn("--tau0", command)
 
 if __name__ == "__main__":
     unittest.main()

@@ -27,7 +27,14 @@ from agentdojo.task_suite.load_suites import get_suite
 
 import harness.attacks  # noqa: F401 - 注册 important_instructions_deepseek
 from harness.attacks import attack_model_name_for
-from harness.budget_allocator import BudgetAllocator
+from harness.budget_allocator import (
+    DEFAULT_ALLOW_THRESHOLD,
+    DEFAULT_COST_TAU0,
+    DEFAULT_REVIEWER_ERRORS,
+    BudgetAllocator,
+    CostBasedAllocator,
+    load_reviewer_error_table,
+)
 from harness.decision_logger import DecisionLogger
 from harness.deepseek_agent_llm import DeepSeekAgentLLM
 from harness.deepseek_judge_client import DeepSeekJudgeClient
@@ -147,6 +154,40 @@ def _system_message(auto_complete: bool) -> str:
     )
 
 
+def build_allocator(
+    args: argparse.Namespace,
+) -> BudgetAllocator | CostBasedAllocator:
+    """P6 allocator chosen by --allocator. Each kind has its own --tau0 default."""
+
+    if args.allocator == "value":
+        if args.reviewer_error_table:
+            raise SystemExit(
+                "--reviewer-error-table only applies to --allocator cost."
+            )
+        return BudgetAllocator(tau0=1.0 if args.tau0 is None else args.tau0)
+
+    if args.q_table:
+        raise SystemExit(
+            "--q-table only applies to --allocator value; "
+            "the cost allocator uses --reviewer-error-table."
+        )
+    table = (
+        load_reviewer_error_table(args.reviewer_error_table)
+        if args.reviewer_error_table
+        else {}
+    )
+    default_errors = table.pop("default", DEFAULT_REVIEWER_ERRORS)
+    return CostBasedAllocator(
+        tau0=DEFAULT_COST_TAU0 if args.tau0 is None else args.tau0,
+        utility_cost=args.utility_cost,
+        allow_threshold=(
+            None if args.auto_rule == "cost" else DEFAULT_ALLOW_THRESHOLD
+        ),
+        reviewer_errors=table,
+        default_reviewer_errors=default_errors,
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     threshold_path = REPO_ROOT / "configs" / "judge_thresholds.json"
     thresholds = json.loads(threshold_path.read_text(encoding="utf-8-sig"))
@@ -235,10 +276,57 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=3,
     )
-    parser.add_argument("--tau0", type=float, default=1.0)
+    parser.add_argument(
+        "--allocator",
+        choices=("value", "cost"),
+        default="value",
+        help=(
+            "P6 allocator for hybrid and no_budget. value: escalate when "
+            "risk x impact x q > tau (original). cost: escalate when review "
+            "lowers the expected cost of the decision by more than tau."
+        ),
+    )
+    parser.add_argument(
+        "--tau0",
+        type=float,
+        help=(
+            "Base escalation threshold. Defaults to 1.0 for --allocator value "
+            f"and {DEFAULT_COST_TAU0} (the cost of one review) for --allocator cost."
+        ),
+    )
     parser.add_argument(
         "--q-table",
-        help="Optional q_table.json from build_q_table.py. Missing tools use q=1.0.",
+        help=(
+            "Optional q_table.json from build_q_table.py. Missing tools use "
+            "q=1.0. --allocator value only."
+        ),
+    )
+    parser.add_argument(
+        "--utility-cost",
+        type=float,
+        default=1.0,
+        help=(
+            "Cost of denying a safe call, against a cost of impact (1-4) for "
+            "allowing an unsafe one. --allocator cost only."
+        ),
+    )
+    parser.add_argument(
+        "--auto-rule",
+        choices=("threshold", "cost"),
+        default="threshold",
+        help=(
+            "How the cost allocator decides calls it does not escalate. "
+            f"threshold: allow when risk < {DEFAULT_ALLOW_THRESHOLD}, as the "
+            "value allocator does. cost: pick the side with lower expected cost."
+        ),
+    )
+    parser.add_argument(
+        "--reviewer-error-table",
+        help=(
+            'JSON of tool_name -> {"false_approve": x, "false_deny": y}, '
+            'estimated on dev. Key "default" covers missing tools. '
+            "--allocator cost only."
+        ),
     )
     parser.add_argument(
         "--injection-task",
@@ -289,6 +377,7 @@ def main() -> None:
         )
 
     q_table = load_q_table(args.q_table) if args.q_table else {}
+    allocator = build_allocator(args)
     attack_mode = args.attack if args.injection_task else "none"
     escalation_budget = escalation_budget_for(args.policy, args.k)
     auto_complete = not args.no_auto_complete
@@ -308,7 +397,13 @@ def main() -> None:
         "injection_task_id": args.injection_task,
         "k": escalation_budget,
         "sample_count": args.sample_count,
-        "tau0": args.tau0,
+        "allocator": args.allocator,
+        "tau0": allocator.tau0,
+        "utility_cost": (
+            args.utility_cost if args.allocator == "cost" else None
+        ),
+        "auto_rule": args.auto_rule if args.allocator == "cost" else None,
+        "reviewer_error_table_path": args.reviewer_error_table,
         "t_low": args.t_low,
         "t_high": args.t_high,
         "auto_complete": auto_complete,
@@ -343,7 +438,7 @@ def main() -> None:
     )
     policy_engine = PolicyEngine(
         judge=judge,
-        allocator=BudgetAllocator(tau0=args.tau0),
+        allocator=allocator,
         q_table=q_table,
         policy_variant=args.policy,
         t_low=args.t_low,

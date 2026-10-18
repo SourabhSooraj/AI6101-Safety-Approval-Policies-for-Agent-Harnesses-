@@ -1,4 +1,4 @@
-from .budget_allocator import BudgetAllocator
+from .budget_allocator import Allocator
 from .decision_logger import DecisionLogger
 from .llm_judge import LLMJudge
 from .policies import PolicyEvaluator, P1OnlyPolicy, create_policy
@@ -13,7 +13,7 @@ class PolicyEngine:
         allowed_tools: set[str] | None = None,
         denied_tools: set[str] | None = None,
         judge: LLMJudge | None = None,
-        allocator: BudgetAllocator | None = None,
+        allocator: Allocator | None = None,
         q_table: dict[str, float] | None = None,
         decision_logger: DecisionLogger | None = None,
         policy: PolicyEvaluator | None = None,
