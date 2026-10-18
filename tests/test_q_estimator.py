@@ -133,6 +133,38 @@ class QEstimatorTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     load_q_table(q_path)
 
+    def _write_reviewer_log(self, name, judge_model, reviewer_model):
+        path = Path(self.temp_directory.name) / name
+        record = {
+            "decision": "REQUIRE_APPROVAL",
+            "risk_score": 0.8,
+            "reviewer_verdict": "DENY",
+            "tool_name": "send_money",
+            "judge_model": judge_model,
+            "reviewer_model": reviewer_model,
+        }
+        path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+        return path
+
+    def test_reads_several_log_files(self):
+        first = self._write_reviewer_log("a.jsonl", "deepseek-flash", "r")
+        second = self._write_reviewer_log("b.jsonl", "deepseek-flash", "r")
+
+        details = estimate_q_details([first, second])
+
+        self.assertEqual(details["send_money"].sample_count, 2)
+
+    def test_mixed_models_are_rejected(self):
+        local = self._write_reviewer_log("local.jsonl", "qwen3:8b", "llama3.1:8b")
+        remote = self._write_reviewer_log("remote.jsonl", "deepseek-flash", "r")
+
+        with self.assertRaises(ValueError):
+            estimate_q_table([local, remote])
+        self.assertEqual(
+            estimate_q_table([local, remote], allow_mixed_models=True),
+            {"send_money": 0.0},
+        )
+
     def test_baseline_threshold_changes_automatic_decision(self):
         details = estimate_q_details(self.log_path, baseline_threshold=0.85)
 

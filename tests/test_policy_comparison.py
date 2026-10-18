@@ -50,6 +50,24 @@ class PolicyComparisonCommandTests(unittest.TestCase):
         self.assertEqual(value_of("--injection-task"), "injection_task_1")
         self.assertNotIn("--agent-thinking", command)
 
+    def test_provider_options_are_passed_through(self):
+        args = build_parser().parse_args(
+            [
+                "--provider", "ollama",
+                "--request-timeout", "600",
+                "--judge-temperature", "0.7",
+            ]
+        )
+
+        command = build_command(args, "hybrid", 3, "user_task_0", "none")
+
+        def value_of(option):
+            return command[command.index(option) + 1]
+
+        self.assertEqual(value_of("--provider"), "ollama")
+        self.assertEqual(value_of("--request-timeout"), "600")
+        self.assertEqual(value_of("--judge-temperature"), "0.7")
+
     def test_allocator_options_are_passed_through(self):
         args = build_parser().parse_args(
             [

@@ -28,7 +28,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "reviewer_logs",
         nargs="+",
-        help="reviewer_decisions.jsonl files or run directories that contain one.",
+        help=(
+            "reviewer_decisions.jsonl files, run directories, or batch "
+            "directories (searched recursively)."
+        ),
     )
     parser.add_argument(
         "--labels",
@@ -50,6 +53,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--allow-mixed-models",
+        action="store_true",
+        help=(
+            "Allow reviews from different Judge/reviewer models. Off by default "
+            "so local Ollama logs never end up in a DeepSeek error table."
+        ),
+    )
+    parser.add_argument(
         "--output",
         help="JSON output path. Prints to stdout when omitted.",
     )
@@ -60,12 +71,16 @@ def main() -> None:
     args = build_parser().parse_args()
     reviews = read_reviews(reviewer_log_paths(args.reviewer_logs))
     labels = read_labels(args.labels)
-    estimates = estimate_reviewer_errors(
-        reviews,
-        labels,
-        group_by=args.group_by,
-        min_samples=args.min_samples,
-    )
+    try:
+        estimates = estimate_reviewer_errors(
+            reviews,
+            labels,
+            group_by=args.group_by,
+            min_samples=args.min_samples,
+            allow_mixed_models=args.allow_mixed_models,
+        )
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
 
     pooled = estimates["default"]
     print(

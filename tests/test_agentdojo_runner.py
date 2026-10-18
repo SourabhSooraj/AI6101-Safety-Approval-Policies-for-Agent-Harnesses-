@@ -1,7 +1,9 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from harness.budget_allocator import (
     DEFAULT_COST_TAU0,
@@ -10,48 +12,62 @@ from harness.budget_allocator import (
     CostBasedAllocator,
     ReviewerErrorRates,
 )
-from scripts.run_agentdojo_e2e import (
-    DEEPSEEK_BASE_URL,
-    LOCAL_PLACEHOLDER_KEY,
-    _system_message,
-    build_allocator,
-    build_parser,
-    resolve_model_settings,
-)
+from harness.episode import build_allocator, config_from_args
+from harness.llm_providers import DEEPSEEK_BASE_URL, LOCAL_PLACEHOLDER_API_KEY
+from scripts.run_agentdojo_e2e import _system_message, build_parser
 
 OLLAMA_URL = "http://localhost:11434/v1"
+HOSTED_URL = "https://api.together.xyz/v1"
 
 
-def _settings(argv, environ):
-    return resolve_model_settings(build_parser().parse_args(argv), environ)
+def _config(argv, environ):
+    with patch.dict(os.environ, environ, clear=True):
+        return config_from_args(build_parser().parse_args(argv))
 
 
 class ModelSettingsTests(unittest.TestCase):
     def test_defaults_use_deepseek_for_every_role(self):
-        settings = _settings([], {"DEEPSEEK_API_KEY": "key"})
+        config = _config([], {"DEEPSEEK_API_KEY": "key"})
 
-        for endpoint in (settings.agent, settings.judge, settings.reviewer):
-            self.assertEqual(endpoint.model, "deepseek-flash")
-            self.assertEqual(endpoint.base_url, DEEPSEEK_BASE_URL)
-            self.assertEqual(endpoint.api_key, "key")
-        self.assertTrue(settings.send_thinking_param)
-        self.assertEqual(settings.attack_model_name, "DeepSeek")
+        for model, base_url, api_key in (
+            (config.agent_model, config.agent_base_url, config.agent_api_key),
+            (config.judge_model, config.judge_base_url, config.judge_api_key),
+            (
+                config.reviewer_model,
+                config.reviewer_base_url,
+                config.reviewer_api_key,
+            ),
+        ):
+            self.assertEqual(model, "deepseek-flash")
+            self.assertEqual(base_url, DEEPSEEK_BASE_URL)
+            self.assertEqual(api_key, "key")
+        self.assertTrue(config.send_thinking_param)
+        self.assertEqual(config.attack_model_name, "DeepSeek")
 
     def test_local_agent_needs_no_key_and_judge_reviewer_follow_it(self):
-        settings = _settings(
+        config = _config(
             ["--model", "qwen2.5:7b", "--agent-base-url", OLLAMA_URL],
             {},
         )
 
-        for endpoint in (settings.agent, settings.judge, settings.reviewer):
-            self.assertEqual(endpoint.model, "qwen2.5:7b")
-            self.assertEqual(endpoint.base_url, OLLAMA_URL)
-            self.assertEqual(endpoint.api_key, LOCAL_PLACEHOLDER_KEY)
-        self.assertFalse(settings.send_thinking_param)
-        self.assertEqual(settings.attack_model_name, "Qwen")
+        for model, base_url, api_key in (
+            (config.agent_model, config.agent_base_url, config.agent_api_key),
+            (config.judge_model, config.judge_base_url, config.judge_api_key),
+            (
+                config.reviewer_model,
+                config.reviewer_base_url,
+                config.reviewer_api_key,
+            ),
+        ):
+            self.assertEqual(model, "qwen2.5:7b")
+            self.assertEqual(base_url, OLLAMA_URL)
+            self.assertEqual(api_key, LOCAL_PLACEHOLDER_API_KEY)
+        # Ollama 用 reasoning_effort 开关思考，所以也发送思考参数。
+        self.assertTrue(config.send_thinking_param)
+        self.assertEqual(config.attack_model_name, "Qwen")
 
     def test_judge_can_use_a_different_server_from_the_agent(self):
-        settings = _settings(
+        config = _config(
             [
                 "--model", "llama3.1:8b",
                 "--agent-base-url", OLLAMA_URL,
@@ -62,30 +78,60 @@ class ModelSettingsTests(unittest.TestCase):
             {"DEEPSEEK_API_KEY": "key"},
         )
 
-        self.assertEqual(settings.judge.model, "deepseek-flash")
-        self.assertEqual(settings.judge.api_key, "key")
-        self.assertEqual(settings.reviewer.model, "llama3.1:8b")
-        self.assertEqual(settings.reviewer.base_url, OLLAMA_URL)
-        self.assertEqual(settings.attack_model_name, "Llama")
+        self.assertEqual(config.judge_model, "deepseek-flash")
+        self.assertEqual(config.judge_api_key, "key")
+        self.assertEqual(config.reviewer_model, "llama3.1:8b")
+        self.assertEqual(config.reviewer_base_url, OLLAMA_URL)
+        self.assertEqual(config.attack_model_name, "Llama")
 
     def test_missing_key_for_a_remote_server_stops_the_run(self):
         with self.assertRaises(SystemExit):
-            _settings([], {})
+            _config([], {})
 
-    def test_thinking_needs_the_deepseek_api(self):
+    def test_other_hosted_apis_get_no_thinking_param(self):
+        config = _config(
+            [
+                "--model", "Qwen/Qwen2.5-72B-Instruct",
+                "--agent-base-url", HOSTED_URL,
+                "--agent-api-key-env", "HOSTED_KEY",
+            ],
+            {"HOSTED_KEY": "key"},
+        )
+
+        self.assertFalse(config.send_thinking_param)
+
+    def test_thinking_needs_deepseek_or_a_local_server(self):
         with self.assertRaises(SystemExit):
-            _settings(
-                ["--agent-base-url", OLLAMA_URL, "--agent-thinking"],
-                {},
+            _config(
+                [
+                    "--agent-base-url", HOSTED_URL,
+                    "--agent-api-key-env", "HOSTED_KEY",
+                    "--agent-thinking",
+                ],
+                {"HOSTED_KEY": "key"},
             )
+        config = _config(
+            ["--provider", "ollama", "--agent-thinking"],
+            {},
+        )
+        self.assertTrue(config.agent_thinking)
 
     def test_explicit_attack_model_name_wins(self):
-        settings = _settings(
+        config = _config(
             ["--attack-model-name", "Assistant"],
             {"DEEPSEEK_API_KEY": "key"},
         )
 
-        self.assertEqual(settings.attack_model_name, "Assistant")
+        self.assertEqual(config.attack_model_name, "Assistant")
+
+    def test_old_api_key_env_name_still_works(self):
+        config = _config(
+            ["--api-key-env", "MY_KEY"],
+            {"MY_KEY": "key"},
+        )
+
+        self.assertEqual(config.agent_api_key, "key")
+        self.assertEqual(config.judge_api_key, "key")
 
 
 class AgentDojoRunnerTests(unittest.TestCase):
@@ -100,9 +146,12 @@ class AgentDojoRunnerTests(unittest.TestCase):
 
         self.assertNotIn("No human user is available", message)
 
+    def test_default_policy_is_hybrid(self):
+        self.assertEqual(build_parser().parse_args([]).policy, "hybrid")
+
 
 def _allocator(argv):
-    return build_allocator(build_parser().parse_args(argv))
+    return build_allocator(_config(["--provider", "ollama", *argv], {}))
 
 
 class AllocatorOptionTests(unittest.TestCase):
@@ -165,6 +214,17 @@ class AllocatorOptionTests(unittest.TestCase):
             _allocator(["--allocator", "cost", "--q-table", "q.json"])
         with self.assertRaises(SystemExit):
             _allocator(["--reviewer-error-table", "errors.json"])
+
+    def test_allocator_settings_are_logged(self):
+        config = _config(
+            ["--provider", "ollama", "--allocator", "cost"], {}
+        )
+
+        context = config.allocator_context()
+        self.assertEqual(context["allocator"], "cost")
+        self.assertEqual(context["tau0"], DEFAULT_COST_TAU0)
+        self.assertEqual(context["utility_cost"], 1.0)
+        self.assertEqual(context["auto_rule"], "threshold")
 
 
 if __name__ == "__main__":

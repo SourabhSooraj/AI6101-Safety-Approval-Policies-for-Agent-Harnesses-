@@ -18,17 +18,27 @@ from tenacity import (
 )
 
 from .cost import TokenUsage, usage_from_openai_response
+from .llm_providers import strip_think, thinking_request_args, thinking_switch
 
 
-def _message_to_deepseek(message: ChatMessage, model_name: str):
+def _message_to_deepseek(
+    message: ChatMessage,
+    model_name: str,
+    disable_thinking: bool = True,
+):
     """DeepSeek Chat Completions 使用 system，而不是 developer role。"""
 
     role = message["role"]
     if role == "system":
-        return {
-            "role": "system",
-            "content": _content_blocks_to_openai_content_blocks(message),
-        }
+        content = _content_blocks_to_openai_content_blocks(message)
+        switch = thinking_switch(model_name) if disable_thinking else ""
+        if switch and content:
+            # qwen3（Ollama）：在 system prompt 末尾关闭思考模式，节省本地推理时间。
+            content = [
+                *content[:-1],
+                {**content[-1], "text": content[-1]["text"] + switch},
+            ]
+        return {"role": "system", "content": content}
     if role == "user":
         return {
             "role": "user",
@@ -62,6 +72,10 @@ def _message_to_deepseek(message: ChatMessage, model_name: str):
 
 def _openai_to_deepseek_assistant(message):
     output = _openai_to_assistant_message(message)
+    # 本地推理模型可能把 <think> 段落写在 content 里，不写回对话历史。
+    for block in output["content"] or []:
+        if block.get("type") == "text" and block.get("content"):
+            block["content"] = strip_think(block["content"])
     reasoning_content = getattr(message, "reasoning_content", None)
     if reasoning_content:
         output["reasoning_content"] = reasoning_content
@@ -83,7 +97,7 @@ def _create_completion(client, **create_args):
 
 
 class DeepSeekAgentLLM(OpenAILLM):
-    """AgentDojo OpenAILLM 的 DeepSeek 兼容版本。"""
+    """AgentDojo OpenAILLM 的 DeepSeek / Ollama 兼容版本。"""
 
     def __init__(
         self,
@@ -95,10 +109,12 @@ class DeepSeekAgentLLM(OpenAILLM):
         cost_period: str = "auto",
         send_thinking_param: bool = True,
     ) -> None:
-        # thinking 字段是 DeepSeek 专有参数；Llama/Qwen 等其他 OpenAI-compatible
-        # 服务可能拒绝它，因此非 DeepSeek API 时不发送。
+        # 思考开关只发给 DeepSeek API（extra_body.thinking）和本地 Ollama
+        # （reasoning_effort）；其他 OpenAI-compatible 服务可能拒绝这些字段。
         if thinking and not send_thinking_param:
-            raise ValueError("Thinking mode is only available on the DeepSeek API.")
+            raise ValueError(
+                "Thinking mode is only available on the DeepSeek API or a local server."
+            )
         super().__init__(
             client,
             model,
@@ -123,7 +139,11 @@ class DeepSeekAgentLLM(OpenAILLM):
             extra_args = {}
 
         openai_messages = [
-            _message_to_deepseek(message, self.model)
+            _message_to_deepseek(
+                message,
+                self.model,
+                disable_thinking=not self.thinking,
+            )
             for message in messages
         ]
         openai_tools = [
@@ -135,18 +155,18 @@ class DeepSeekAgentLLM(OpenAILLM):
             "messages": openai_messages,
         }
         if self.send_thinking_param:
-            create_args["extra_body"] = {
-                "thinking": {
-                    "type": "enabled" if self.thinking else "disabled"
-                }
-            }
+            create_args.update(
+                thinking_request_args(
+                    str(getattr(self.client, "base_url", "")),
+                    self.thinking,
+                    self.reasoning_effort,
+                )
+            )
         if openai_tools:
             create_args["tools"] = openai_tools
             create_args["tool_choice"] = "auto"
         if not self.thinking:
             create_args["temperature"] = self.temperature
-        elif self.reasoning_effort:
-            create_args["reasoning_effort"] = self.reasoning_effort
 
         completion = _create_completion(self.client, **create_args)
         self.total_usage = self.total_usage + usage_from_openai_response(

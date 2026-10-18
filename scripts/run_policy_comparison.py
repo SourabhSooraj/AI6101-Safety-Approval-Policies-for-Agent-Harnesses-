@@ -17,13 +17,16 @@ P6_POLICIES = frozenset({"hybrid", "no_budget"})
 
 # Options passed unchanged to run_agentdojo_e2e.py when given.
 PASSTHROUGH_OPTIONS = (
+    ("--provider", "Default models and endpoint: deepseek or ollama."),
     ("--sample-count", "Judge samples per call."),
+    ("--request-timeout", "Seconds per LLM request."),
     ("--model", "Agent model."),
     ("--agent-base-url", "OpenAI-compatible base URL for the agent."),
     ("--agent-api-key-env", "Environment variable holding the agent API key."),
     ("--judge-model", "Judge model."),
     ("--judge-base-url", "OpenAI-compatible base URL for the Judge."),
     ("--judge-api-key-env", "Environment variable holding the Judge API key."),
+    ("--judge-temperature", "Judge sampling temperature."),
     ("--reviewer-model", "Simulated reviewer model."),
     ("--reviewer-base-url", "OpenAI-compatible base URL for the reviewer."),
     ("--reviewer-api-key-env", "Environment variable holding the reviewer API key."),
@@ -126,7 +129,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--agent-thinking",
         action="store_true",
-        help="Enable DeepSeek thinking mode for the agent (DeepSeek API only).",
+        help="Enable thinking mode for the agent (DeepSeek API or local Ollama only).",
     )
     return parser
 

@@ -1,9 +1,13 @@
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from collections.abc import Iterable, Sequence
+from typing import Any
 
 from .budget_allocator import DEFAULT_ALLOW_THRESHOLD
+
+
+LogPaths = str | Path | Sequence[str | Path]
 
 
 @dataclass(frozen=True)
@@ -14,10 +18,11 @@ class QEstimate:
 
 
 def estimate_q_table(
-    log_path: str | Path,
+    log_path: LogPaths,
     group_by: str = "tool_name",
     baseline_threshold: float = DEFAULT_ALLOW_THRESHOLD,
     min_samples: int = 1,
+    allow_mixed_models: bool = False,
 ) -> dict[str, float]:
     """
     从 dev JSONL 日志估计 q = P(reviewer 改变自动决定)。
@@ -30,12 +35,17 @@ def estimate_q_table(
 
     reviewer_success 为 false 的记录会被跳过：失败时的 DENY 是 fail-closed
     默认值，不是 reviewer 的真实判断。stage 不是 p6 的记录也会被跳过。
+
+    log_path 可以是一个或多个 JSONL 文件。q 依赖 Judge 和 reviewer 模型，
+    计入的记录来自多个 (judge_model, reviewer_model) 组合时默认报错，
+    避免本地开发日志混入 DeepSeek 的 q table。
     """
 
     grouped = _collect_q_estimates(
-        _read_jsonl(log_path),
+        _read_jsonl_files(log_path),
         group_by=group_by,
         baseline_threshold=baseline_threshold,
+        allow_mixed_models=allow_mixed_models,
     )
     return {
         key: estimate.q
@@ -45,17 +55,25 @@ def estimate_q_table(
 
 
 def estimate_q_details(
-    log_path: str | Path,
+    log_path: LogPaths,
     group_by: str = "tool_name",
     baseline_threshold: float = DEFAULT_ALLOW_THRESHOLD,
+    allow_mixed_models: bool = False,
 ) -> dict[str, QEstimate]:
     """返回每组样本数、改变次数和 q，便于报告检查。"""
 
     return _collect_q_estimates(
-        _read_jsonl(log_path),
+        _read_jsonl_files(log_path),
         group_by=group_by,
         baseline_threshold=baseline_threshold,
+        allow_mixed_models=allow_mixed_models,
     )
+
+
+def models_in_logs(log_path: LogPaths) -> set[tuple[Any, Any]]:
+    """返回日志中出现的 (judge_model, reviewer_model) 组合。"""
+
+    return {model_key(record) for record in _read_jsonl_files(log_path)}
 
 
 def load_q_table(path: str | Path) -> dict[str, float]:
@@ -75,6 +93,43 @@ def load_q_table(path: str | Path) -> dict[str, float]:
     return q_table
 
 
+def _read_jsonl_files(log_path: LogPaths) -> Iterable[dict[str, Any]]:
+    paths = (
+        [log_path] if isinstance(log_path, (str, Path)) else list(log_path)
+    )
+    for path in paths:
+        yield from _read_jsonl(path)
+
+
+def model_key(record: dict[str, Any]) -> tuple[Any, Any]:
+    """记录的 (judge_model, reviewer_model)；旧日志没有这两个字段，记为 None。"""
+
+    return record.get("judge_model"), record.get("reviewer_model")
+
+
+def check_single_model_pair(
+    model_keys: set[tuple[Any, Any]],
+    what: str,
+    allow_mixed_models: bool = False,
+) -> None:
+    """
+    q table 和 reviewer 错误表都取决于 Judge 和 reviewer 模型；
+    计入的记录来自多个组合时报错，避免本地开发日志混入 DeepSeek 的结果。
+    """
+
+    if len(model_keys) <= 1 or allow_mixed_models:
+        return
+    found = ", ".join(
+        f"judge={judge} reviewer={reviewer}"
+        for judge, reviewer in sorted(model_keys, key=str)
+    )
+    raise ValueError(
+        f"Logs mix several Judge/reviewer models; {what} depends on both, so "
+        f"build one table per pair ({found}). "
+        "Pass allow_mixed_models=True to override."
+    )
+
+
 def _read_jsonl(log_path: str | Path) -> Iterable[dict[str, Any]]:
     # utf-8-sig 兼容 Windows PowerShell 5.1 写入的 BOM。
     with Path(log_path).open("r", encoding="utf-8-sig") as file:
@@ -86,7 +141,7 @@ def _read_jsonl(log_path: str | Path) -> Iterable[dict[str, Any]]:
                 yield json.loads(stripped)
             except json.JSONDecodeError as error:
                 raise ValueError(
-                    f"Invalid JSON on log line {line_number}"
+                    f"Invalid JSON on line {line_number} of {log_path}"
                 ) from error
 
 
@@ -94,9 +149,11 @@ def _collect_q_estimates(
     records: Iterable[dict[str, Any]],
     group_by: str,
     baseline_threshold: float,
+    allow_mixed_models: bool = False,
 ) -> dict[str, QEstimate]:
     counts: dict[str, int] = {}
     changes: dict[str, int] = {}
+    model_keys: set[tuple[Any, Any]] = set()
 
     for record in records:
         if str(record.get("decision", "")).upper() != "REQUIRE_APPROVAL":
@@ -124,9 +181,12 @@ def _collect_q_estimates(
             "ALLOW" if float(risk_score) < baseline_threshold else "DENY"
         )
 
+        model_keys.add(model_key(record))
         counts[group_key] = counts.get(group_key, 0) + 1
         if reviewer_decision != baseline_decision:
             changes[group_key] = changes.get(group_key, 0) + 1
+
+    check_single_model_pair(model_keys, "q", allow_mixed_models)
 
     return {
         group: QEstimate(

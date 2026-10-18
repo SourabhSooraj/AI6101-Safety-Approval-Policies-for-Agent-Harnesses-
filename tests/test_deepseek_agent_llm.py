@@ -22,9 +22,10 @@ def _usage(prompt_tokens: int, completion_tokens: int):
 
 
 class FakeCompletions:
-    def __init__(self, usages=None):
+    def __init__(self, usages=None, content="final answer"):
         self.calls = []
         self.usages = list(usages or [])
+        self.content = content
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
@@ -32,7 +33,7 @@ class FakeCompletions:
             choices=[
                 SimpleNamespace(
                     message=SimpleNamespace(
-                        content="final answer",
+                        content=self.content,
                         tool_calls=None,
                         reasoning_content="internal reasoning",
                     )
@@ -43,8 +44,8 @@ class FakeCompletions:
 
 
 class FakeDeepSeekClient:
-    def __init__(self, usages=None):
-        self.completions = FakeCompletions(usages)
+    def __init__(self, usages=None, content="final answer"):
+        self.completions = FakeCompletions(usages, content)
         self.chat = SimpleNamespace(completions=self.completions)
 
 
@@ -113,6 +114,17 @@ class DeepSeekAgentLLMTests(unittest.TestCase):
             "internal reasoning",
         )
 
+    def test_ollama_disables_thinking_with_reasoning_effort(self):
+        client = FakeDeepSeekClient()
+        client.base_url = "http://localhost:11434/v1/"
+        llm = DeepSeekAgentLLM(client, "qwen3:8b")
+
+        llm.query(query="Pay the bill.", runtime=FunctionsRuntime({}))
+
+        request = client.completions.calls[0]
+        self.assertEqual(request["reasoning_effort"], "none")
+        self.assertNotIn("extra_body", request)
+
     def test_non_deepseek_api_gets_no_thinking_field(self):
         client = FakeDeepSeekClient()
         llm = DeepSeekAgentLLM(
@@ -163,6 +175,36 @@ class DeepSeekAgentLLMTests(unittest.TestCase):
         self.assertEqual(
             request_message["reasoning_content"],
             "previous reasoning",
+        )
+
+    def test_qwen3_system_message_disables_thinking(self):
+        message = {
+            "role": "system",
+            "content": [{"type": "text", "content": "You are helpful."}],
+        }
+
+        converted = _message_to_deepseek(message, "qwen3:8b")
+        with_thinking = _message_to_deepseek(
+            message, "qwen3:8b", disable_thinking=False
+        )
+
+        self.assertEqual(
+            converted["content"][0]["text"],
+            "You are helpful. /no_think",
+        )
+        self.assertEqual(with_thinking["content"][0]["text"], "You are helpful.")
+
+    def test_think_block_is_not_kept_in_history(self):
+        client = FakeDeepSeekClient(content="<think>plan {x}</think>All paid.")
+        llm = DeepSeekAgentLLM(client, "qwen3:8b")
+
+        _, _, _, output_messages, _ = llm.query(
+            "Pay the bill.", FunctionsRuntime({})
+        )
+
+        self.assertEqual(
+            output_messages[-1]["content"][0]["content"],
+            "All paid.",
         )
 
     def test_agent_usage_is_accumulated(self):
