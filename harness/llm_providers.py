@@ -84,3 +84,29 @@ def thinking_switch(model: str) -> str:
     """qwen3 的软开关：在提示末尾加 /no_think 关闭思考模式。"""
 
     return " /no_think" if model.lower().startswith("qwen3") else ""
+
+
+def thinking_request_args(
+    base_url: str,
+    thinking: bool,
+    reasoning_effort: str | None = None,
+) -> dict:
+    """
+    按 provider 生成开关思考模式的请求参数。
+
+    Ollama 会静默忽略 DeepSeek 的 extra_body.thinking，较新版本也不再理会
+    /no_think；只有 reasoning_effort="none" 能真正关闭 qwen3 的思考。
+    """
+
+    if is_local_base_url(base_url):
+        if not thinking:
+            return {"reasoning_effort": "none"}
+        return {"reasoning_effort": reasoning_effort} if reasoning_effort else {}
+    args: dict = {
+        "extra_body": {
+            "thinking": {"type": "enabled" if thinking else "disabled"}
+        }
+    }
+    if thinking and reasoning_effort:
+        args["reasoning_effort"] = reasoning_effort
+    return args

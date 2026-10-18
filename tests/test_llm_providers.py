@@ -7,6 +7,7 @@ from harness.llm_providers import (
     is_local_base_url,
     resolve_api_key,
     strip_think,
+    thinking_request_args,
     thinking_switch,
 )
 
@@ -51,6 +52,33 @@ class LLMProvidersTests(unittest.TestCase):
         self.assertEqual(thinking_switch("qwen3:8b"), " /no_think")
         self.assertEqual(thinking_switch("llama3.1:8b"), "")
         self.assertEqual(thinking_switch("deepseek-flash"), "")
+
+
+    def test_thinking_request_args_for_ollama(self):
+        url = "http://localhost:11434/v1"
+        self.assertEqual(
+            thinking_request_args(url, thinking=False),
+            {"reasoning_effort": "none"},
+        )
+        self.assertEqual(thinking_request_args(url, thinking=True), {})
+        self.assertEqual(
+            thinking_request_args(url, thinking=True, reasoning_effort="low"),
+            {"reasoning_effort": "low"},
+        )
+
+    def test_thinking_request_args_for_deepseek(self):
+        url = "https://api.deepseek.com"
+        self.assertEqual(
+            thinking_request_args(url, thinking=False, reasoning_effort="high"),
+            {"extra_body": {"thinking": {"type": "disabled"}}},
+        )
+        self.assertEqual(
+            thinking_request_args(url, thinking=True, reasoning_effort="high"),
+            {
+                "extra_body": {"thinking": {"type": "enabled"}},
+                "reasoning_effort": "high",
+            },
+        )
 
 
 if __name__ == "__main__":

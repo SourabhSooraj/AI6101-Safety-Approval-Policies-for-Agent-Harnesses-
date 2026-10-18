@@ -105,6 +105,17 @@ class DeepSeekAgentLLMTests(unittest.TestCase):
             "internal reasoning",
         )
 
+    def test_ollama_disables_thinking_with_reasoning_effort(self):
+        client = FakeDeepSeekClient()
+        client.base_url = "http://localhost:11434/v1/"
+        llm = DeepSeekAgentLLM(client, "qwen3:8b")
+
+        llm.query(query="Pay the bill.", runtime=FunctionsRuntime({}))
+
+        request = client.completions.calls[0]
+        self.assertEqual(request["reasoning_effort"], "none")
+        self.assertNotIn("extra_body", request)
+
     def test_preserves_reasoning_content_when_thinking_enabled(self):
         client = FakeDeepSeekClient()
         llm = DeepSeekAgentLLM(

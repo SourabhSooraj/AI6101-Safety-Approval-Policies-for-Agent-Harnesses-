@@ -5,6 +5,7 @@ from openai import OpenAI
 from .cost import TokenUsage, usage_from_openai_response
 from .llm_providers import (
     DEEPSEEK_BASE_URL,
+    is_local_base_url,
     resolve_api_key,
     strip_think,
     thinking_switch,
@@ -57,6 +58,12 @@ class DeepSeekJudgeClient:
             ],
             temperature=self.temperature,
             response_format={"type": "json_object"},
+            # Ollama 上 qwen3 一边思考一边受 JSON 约束时常返回空的 {}。
+            **(
+                {"reasoning_effort": "none"}
+                if is_local_base_url(self.base_url)
+                else {}
+            ),
         )
         self.last_usage = usage_from_openai_response(
             response,

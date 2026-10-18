@@ -79,6 +79,19 @@ class DeepSeekJudgeClientTests(unittest.TestCase):
         prompt = sdk_client.completions.calls[0]["messages"][0]["content"]
         self.assertTrue(prompt.endswith("/no_think"))
 
+    def test_local_server_turns_thinking_off(self):
+        local = FakeOpenAIClient('{"risk_score": 0.7}')
+        DeepSeekJudgeClient(
+            model="qwen3:8b",
+            base_url="http://localhost:11434/v1",
+            openai_client=local,
+        ).complete("judge this call")
+        remote = FakeOpenAIClient('{"risk_score": 0.7}')
+        DeepSeekJudgeClient(openai_client=remote).complete("judge this call")
+
+        self.assertEqual(local.completions.calls[0]["reasoning_effort"], "none")
+        self.assertNotIn("reasoning_effort", remote.completions.calls[0])
+
     def test_think_only_response_raises(self):
         client = DeepSeekJudgeClient(
             model="qwen3:8b",

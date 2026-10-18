@@ -11,7 +11,7 @@ from agentdojo.functions_runtime import EmptyEnv, Env, FunctionsRuntime
 from agentdojo.types import ChatMessage
 
 from .cost import TokenUsage, usage_from_openai_response
-from .llm_providers import strip_think, thinking_switch
+from .llm_providers import strip_think, thinking_request_args, thinking_switch
 
 
 def _message_to_deepseek(
@@ -124,19 +124,17 @@ class DeepSeekAgentLLM(OpenAILLM):
         create_args = {
             "model": self.model,
             "messages": openai_messages,
-            "extra_body": {
-                "thinking": {
-                    "type": "enabled" if self.thinking else "disabled"
-                }
-            },
+            **thinking_request_args(
+                str(getattr(self.client, "base_url", "")),
+                self.thinking,
+                self.reasoning_effort,
+            ),
         }
         if openai_tools:
             create_args["tools"] = openai_tools
             create_args["tool_choice"] = "auto"
         if not self.thinking:
             create_args["temperature"] = self.temperature
-        elif self.reasoning_effort:
-            create_args["reasoning_effort"] = self.reasoning_effort
 
         completion = self.client.chat.completions.create(**create_args)
         self.total_usage = self.total_usage + usage_from_openai_response(
