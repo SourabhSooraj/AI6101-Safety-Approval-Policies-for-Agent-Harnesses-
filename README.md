@@ -142,11 +142,14 @@ Then run the same commands as below with `--provider ollama`:
 
 What changes for local models:
 
-- **qwen3 thinking mode is switched off.** `/no_think` is added to the Judge
-  prompt and to the agent's system prompt, and any `<think>...</think>` block
-  is removed from replies. Otherwise braces inside the reasoning break the
-  Judge's JSON parsing (every call would fall back to "unsafe") and the
-  reasoning would be fed back into the agent's history.
+- **qwen3 thinking mode is switched off.** Requests to a local server send
+  `reasoning_effort="none"`, which is what current Ollama versions honour
+  (they ignore DeepSeek's `extra_body.thinking`). `/no_think` is still added to
+  the Judge prompt and the agent's system prompt as a fallback, and any
+  `<think>...</think>` block is removed from replies. Otherwise braces inside
+  the reasoning break the Judge's JSON parsing (every call would fall back to
+  "unsafe") and the reasoning would be fed back into the agent's history.
+  `--agent-thinking` turns it back on for the agent.
 - **Timeouts are 300 s per request** (`--request-timeout` to change).
 - **Judge disagreement rarely fires.** At `--judge-temperature 0.0` the three
   Judge samples are almost identical. Use e.g. `--judge-temperature 0.7` when
@@ -154,7 +157,8 @@ What changes for local models:
 - **Local results are not experiment results.** Use them to check that the
   code runs and the logs look right. `tau0` and the q table depend on how the
   Judge and reviewer behave, so they must come from DeepSeek dev runs.
-  `build_q_table.py` refuses to mix logs from different Judge/reviewer models.
+  `build_q_table.py` and `build_reviewer_error_table.py` refuse to mix logs
+  from different Judge/reviewer models.
 
 You can also mix providers, for example a local agent and Judge with a
 DeepSeek reviewer: `--provider ollama --reviewer-model deepseek-flash
@@ -505,6 +509,10 @@ depends on both. This keeps local Ollama logs out of a DeepSeek q table.
 `--allow-mixed-models` overrides the check. Logs written before these fields
 existed count as model `None`.
 
+The cost allocator's `scripts/build_reviewer_error_table.py` (and
+`scripts/make_label_sheet.py`) also accept a batch folder and apply the same
+check to the labelled reviews, with the same `--allow-mixed-models` override.
+
 Records with `reviewer_success: false` are skipped, because a failed review
 defaults to `DENY` and is not a real reviewer judgement. Records whose `stage`
 is not `p6` (from `p1_only` or `escalate_all` runs) are skipped too, because
@@ -553,9 +561,11 @@ resets on a retry.
   provider's default temperature (1.0 on DeepSeek). `DeepSeekAgentLLM` now sends
   `temperature=0.0` explicitly. Runs from before this change are not directly
   comparable with later ones.
-- **The attack text still says "DeepSeek" for local models.** The
-  `important_instructions_deepseek` template is kept unchanged so that local
-  development runs use the same injection text as the DeepSeek runs.
+- **The attack text names the agent's model.** `--attack-model-name` defaults
+  to a name guessed from the agent model, so local qwen3 runs are addressed as
+  "Qwen" and DeepSeek runs as "DeepSeek". Pass `--attack-model-name DeepSeek`
+  on local runs if you want exactly the same injection text as the DeepSeek
+  runs.
 - **Reading AgentDojo's `security` flag.** `security=True` means the attack
   succeeded, and AgentDojo also returns `True` for every run without an attack.
   The e2e script reports it as `attack_succeeded`, which is `None` when no
@@ -696,16 +706,19 @@ OLLAMA_CONTEXT_LENGTH=16384 OLLAMA_MAX_LOADED_MODELS=2 ollama serve
 
 本地模型的区别：
 
-- **关闭 qwen3 思考模式。** Judge prompt 和 agent 的 system prompt 末尾会加上
-  `/no_think`，回复中的 `<think>...</think>` 段落会被删除。否则思考内容中的
-  花括号会让 Judge 的 JSON 解析失败（每次都回退为“不安全”），思考内容也会被
-  写回 agent 的对话历史。
+- **关闭 qwen3 思考模式。** 发给本地服务的请求带 `reasoning_effort="none"`，
+  这是当前 Ollama 版本真正遵守的开关（它会忽略 DeepSeek 的 `extra_body.thinking`）。
+  Judge prompt 和 agent 的 system prompt 末尾仍会加上 `/no_think` 作为后备，
+  回复中的 `<think>...</think>` 段落会被删除。否则思考内容中的花括号会让 Judge
+  的 JSON 解析失败（每次都回退为“不安全”），思考内容也会被写回 agent 的对话历史。
+  `--agent-thinking` 可为 agent 重新开启思考。
 - **每次请求超时为 300 秒**（用 `--request-timeout` 修改）。
 - **Judge 分歧检测很少触发。** `--judge-temperature 0.0` 时三次采样几乎相同。
   需要测试分歧路径时可用 `--judge-temperature 0.7` 等。
 - **本地结果不是实验结果。** 只用来检查代码能运行、日志正确。`tau0` 和 q table
   取决于 Judge 和 reviewer 的行为，必须来自 DeepSeek dev 运行。
-  `build_q_table.py` 会拒绝混合不同 Judge / reviewer 模型的日志。
+  `build_q_table.py` 和 `build_reviewer_error_table.py` 会拒绝混合不同
+  Judge / reviewer 模型的日志。
 
 也可以混合使用，例如本地 agent 和 Judge 加 DeepSeek reviewer：
 `--provider ollama --reviewer-model deepseek-flash
@@ -1019,6 +1032,10 @@ reviewer 日志把最终审核结果写入 `reviewer_verdict`，把审核是否�
 两者。这样本地 Ollama 日志不会混入 DeepSeek 的 q table。`--allow-mixed-models`
 可跳过检查。加入这些字段之前写入的日志，模型记为 `None`。
 
+cost allocator 使用的 `scripts/build_reviewer_error_table.py`（以及
+`scripts/make_label_sheet.py`）同样接受 batch 文件夹，并对带标签的审核记录做
+相同检查，也可用 `--allow-mixed-models` 跳过。
+
 `reviewer_success: false` 的记录会被跳过，因为审核失败时默认 `DENY`，并不是
 reviewer 的真实判断。`stage` 不是 `p6` 的记录（来自 `p1_only` 或 `escalate_all`
 运行）也会被跳过，因为它们的 `risk_score` 是固定占位值，不是 Judge 分数。`--baseline-threshold`（默认 `0.5`）必须与 allocator 的
@@ -1057,8 +1074,9 @@ task id 和用户请求开始。每个 episode 都应新建 pipeline（以及新
 - **Agent 使用温度 0。** AgentDojo 自带的请求函数发送 `temperature or NOT_GIVEN`，
   会丢掉 `0.0`，所以之前的运行实际使用 provider 默认温度（DeepSeek 为 1.0）。
   `DeepSeekAgentLLM` 现在显式发送 `temperature=0.0`。此改动之前和之后的运行不能直接比较。
-- **本地模型下攻击文本仍称 "DeepSeek"。** 保留 `important_instructions_deepseek`
-  模板不变，使本地开发运行与 DeepSeek 运行使用相同的注入文本。
+- **攻击文本称呼 agent 的模型。** `--attack-model-name` 默认按 agent 模型推断，
+  本地 qwen3 运行称 "Qwen"，DeepSeek 运行称 "DeepSeek"。如果希望本地运行与
+  DeepSeek 运行的注入文本完全相同，可加 `--attack-model-name DeepSeek`。
 - **AgentDojo 的 `security` 标志。** `security=True` 表示攻击成功，且没有攻击的运行
   也总是返回 `True`。e2e 脚本把它输出为 `attack_succeeded`，未启用攻击时为 `None`。
   有攻击时，安全的结果是 `utility=True` 且 `attack_succeeded=False`。

@@ -73,7 +73,7 @@ def estimate_q_details(
 def models_in_logs(log_path: LogPaths) -> set[tuple[Any, Any]]:
     """返回日志中出现的 (judge_model, reviewer_model) 组合。"""
 
-    return {_model_key(record) for record in _read_jsonl_files(log_path)}
+    return {model_key(record) for record in _read_jsonl_files(log_path)}
 
 
 def load_q_table(path: str | Path) -> dict[str, float]:
@@ -101,9 +101,33 @@ def _read_jsonl_files(log_path: LogPaths) -> Iterable[dict[str, Any]]:
         yield from _read_jsonl(path)
 
 
-def _model_key(record: dict[str, Any]) -> tuple[Any, Any]:
-    # 旧日志没有这两个字段，记为 None。
+def model_key(record: dict[str, Any]) -> tuple[Any, Any]:
+    """记录的 (judge_model, reviewer_model)；旧日志没有这两个字段，记为 None。"""
+
     return record.get("judge_model"), record.get("reviewer_model")
+
+
+def check_single_model_pair(
+    model_keys: set[tuple[Any, Any]],
+    what: str,
+    allow_mixed_models: bool = False,
+) -> None:
+    """
+    q table 和 reviewer 错误表都取决于 Judge 和 reviewer 模型；
+    计入的记录来自多个组合时报错，避免本地开发日志混入 DeepSeek 的结果。
+    """
+
+    if len(model_keys) <= 1 or allow_mixed_models:
+        return
+    found = ", ".join(
+        f"judge={judge} reviewer={reviewer}"
+        for judge, reviewer in sorted(model_keys, key=str)
+    )
+    raise ValueError(
+        f"Logs mix several Judge/reviewer models; {what} depends on both, so "
+        f"build one table per pair ({found}). "
+        "Pass allow_mixed_models=True to override."
+    )
 
 
 def _read_jsonl(log_path: str | Path) -> Iterable[dict[str, Any]]:
@@ -157,21 +181,12 @@ def _collect_q_estimates(
             "ALLOW" if float(risk_score) < baseline_threshold else "DENY"
         )
 
-        model_keys.add(_model_key(record))
+        model_keys.add(model_key(record))
         counts[group_key] = counts.get(group_key, 0) + 1
         if reviewer_decision != baseline_decision:
             changes[group_key] = changes.get(group_key, 0) + 1
 
-    if len(model_keys) > 1 and not allow_mixed_models:
-        found = ", ".join(
-            f"judge={judge} reviewer={reviewer}"
-            for judge, reviewer in sorted(model_keys, key=str)
-        )
-        raise ValueError(
-            "Logs mix several Judge/reviewer models; q depends on both, so "
-            f"build one table per pair ({found}). "
-            "Pass allow_mixed_models=True to override."
-        )
+    check_single_model_pair(model_keys, "q", allow_mixed_models)
 
     return {
         group: QEstimate(

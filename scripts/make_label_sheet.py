@@ -30,11 +30,18 @@ GroundTruthLookup = Callable[
 
 
 def reviewer_log_paths(paths: Iterable[str]) -> list[Path]:
-    """Accept reviewer logs or run directories that contain one."""
+    """Accept reviewer logs, run directories, or batch directories."""
 
     resolved = []
     for raw in paths:
         path = Path(raw)
+        if path.is_dir() and not (path / REVIEWER_LOG_NAME).is_file():
+            # run_batch.py 的文件夹：每个 episode 子文件夹各有一份 reviewer 日志。
+            found = sorted(path.rglob(REVIEWER_LOG_NAME))
+            if not found:
+                raise SystemExit(f"No reviewer log under {path}")
+            resolved.extend(found)
+            continue
         if path.is_dir():
             path = path / REVIEWER_LOG_NAME
         if not path.is_file():
@@ -138,7 +145,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "reviewer_logs",
         nargs="+",
-        help=f"{REVIEWER_LOG_NAME} files or run directories that contain one.",
+        help=f"{REVIEWER_LOG_NAME} files, run directories, or batch directories.",
     )
     parser.add_argument("--output", required=True, help="CSV path to write.")
     parser.add_argument(
