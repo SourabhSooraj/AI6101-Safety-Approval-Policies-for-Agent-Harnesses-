@@ -129,7 +129,7 @@ class PolicyEngineHybridTests(unittest.TestCase):
         client = SequenceJudgeClient(
             ['{"risk_score": 0.6, "reason": "uncertain"}']
         )
-        # value 3.6 > tau 1.0：本应升级，预算为 0 时拒绝。
+        # risk 0.6 在 Judge 阈值之间；value 2.4 > tau 1.0，本应升级，预算为 0 时拒绝。
         engine = PolicyEngine(
             judge=LLMJudge(client, sample_count=1),
             allocator=BudgetAllocator(tau0=1.0),

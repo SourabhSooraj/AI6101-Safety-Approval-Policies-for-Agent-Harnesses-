@@ -221,9 +221,12 @@ class PolicyGateToolsExecutor(ToolsExecutor):
 
     @staticmethod
     def _is_risky_call(policy_result: PolicyResult) -> bool:
-        """P1 无法单独决定的调用：到达 P6，或未配置 Judge 时停在 P1 升级。"""
+        """
+        P1 无法单独决定的调用：hybrid 中由 Judge 阈值直接决定（judge）或进入
+        P6（p6），或 P1-only 时停在 P1 升级。
+        """
 
-        if policy_result.stage == "p6":
+        if policy_result.stage in {"judge", "p6"}:
             return True
         return (
             policy_result.stage == "p1"

@@ -1,6 +1,6 @@
 from dataclasses import replace
 
-from ..budget_allocator import BudgetAllocator
+from ..budget_allocator import Allocator
 from ..llm_judge import LLMJudge
 from ..policy import Decision, PolicyRequest, PolicyResult
 from .base import attach_judge_metadata
@@ -15,7 +15,7 @@ class HybridPolicy:
     def __init__(
         self,
         judge: LLMJudge,
-        allocator: BudgetAllocator,
+        allocator: Allocator,
         q_table: dict[str, float] | None = None,
         t_low: float = 0.3,
         t_high: float = 0.7,
@@ -32,7 +32,8 @@ class HybridPolicy:
     def evaluate(self, request: PolicyRequest) -> PolicyResult:
         p1_result = evaluate_p1(request)
         if p1_result.decision != Decision.REQUIRE_APPROVAL:
-            return p1_result
+            # evaluate_p1 标记为 p1_only；在 hybrid 中做出的决定要记为 hybrid。
+            return replace(p1_result, policy_variant=self.name)
 
         judge_result = self.judge.score(request)
         impact = (
@@ -91,6 +92,7 @@ class HybridPolicy:
             force_escalation=(
                 not judge_result.success or judge_result.disagreement
             ),
+            tool_name=request.tool_name,
         )
         allocated_result = replace(
             allocated_result,
