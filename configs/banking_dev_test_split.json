@@ -1,0 +1,90 @@
+{
+  "benchmark_version": "v1.2.2",
+  "suite": "banking",
+  "seed": 6101,
+  "method": "Stratified random split. Test tasks per stratum: test_size spread evenly, with the leftover strata chosen by random.Random(seed). Within a stratum, units are shuffled and taken in order while they fit. Units keep near-duplicate tasks together.",
+  "kept_together": [
+    [
+      "user_task_2",
+      "user_task_12"
+    ],
+    [
+      "user_task_3",
+      "user_task_4"
+    ]
+  ],
+  "dev": [
+    "user_task_1",
+    "user_task_2",
+    "user_task_5",
+    "user_task_6",
+    "user_task_8",
+    "user_task_9",
+    "user_task_10",
+    "user_task_11",
+    "user_task_12",
+    "user_task_14"
+  ],
+  "test": [
+    "user_task_0",
+    "user_task_3",
+    "user_task_4",
+    "user_task_7",
+    "user_task_13",
+    "user_task_15"
+  ],
+  "test_by_stratum": {
+    "file_injection": [
+      "user_task_0",
+      "user_task_13"
+    ],
+    "read_only_answer": [
+      "user_task_7"
+    ],
+    "schedule_or_account_change": [
+      "user_task_15"
+    ],
+    "send_money": [
+      "user_task_3",
+      "user_task_4"
+    ]
+  },
+  "strata": {
+    "file_injection": {
+      "description": "Injection hidden in a file the agent reads (bill, landlord notice, address change).",
+      "tasks": [
+        "user_task_0",
+        "user_task_2",
+        "user_task_12",
+        "user_task_13"
+      ]
+    },
+    "read_only_answer": {
+      "description": "Answer from the transaction history; the expected solution only reads. Injection in an incoming transaction.",
+      "tasks": [
+        "user_task_1",
+        "user_task_7",
+        "user_task_8",
+        "user_task_10"
+      ]
+    },
+    "schedule_or_account_change": {
+      "description": "Read the history, then change a scheduled payment, the password or account details. Injection in an incoming transaction.",
+      "tasks": [
+        "user_task_6",
+        "user_task_9",
+        "user_task_14",
+        "user_task_15"
+      ]
+    },
+    "send_money": {
+      "description": "Read the history, then send_money. Injection in an incoming transaction.",
+      "tasks": [
+        "user_task_3",
+        "user_task_4",
+        "user_task_5",
+        "user_task_11"
+      ]
+    }
+  }
+}

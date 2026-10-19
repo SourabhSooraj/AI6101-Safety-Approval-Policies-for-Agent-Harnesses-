@@ -314,12 +314,18 @@ to `run_summary.json` (`provider`, `agent_model`, `judge_model`,
 ### Batch runs and the dev/test split
 
 `scripts/run_batch.py` runs every combination of tasks, policies and injection
-tasks, with a fresh pipeline per episode. The banking suite is split into:
+tasks, with a fresh pipeline per episode. `--split` reads the banking split in
+`configs/banking_dev_test_split.json` (made by `scripts/make_dev_test_split.py`,
+seed 6101; pick another file with `--split-file`):
 
-- `--split dev`: `user_task_0` to `user_task_7`, for Judge calibration, choosing
-  `tau0` and building the q table;
-- `--split test`: `user_task_8` to `user_task_15`, used only for the final run
-  with settings frozen from the dev split.
+- `--split dev`: tasks 1, 2, 5, 6, 8, 9, 10, 11, 12 and 14, for Judge
+  calibration, choosing `tau0` and building the q table;
+- `--split test`: tasks 0, 3, 4, 7, 13 and 15, used only for the final run with
+  settings frozen from the dev split.
+
+The split is stratified: each of the four kinds of banking task has tasks on
+both sides, and the near-duplicate pairs (2 and 12, 3 and 4) stay on the same
+side, so tuning on one doesn't leak into the other's test score.
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\run_batch.py `
@@ -924,12 +930,17 @@ reviewer 时，说明端到端链路成功。
 ### 批量运行与 dev/test 划分
 
 `scripts/run_batch.py` 运行 task、policy 和 injection task 的所有组合，每个
-episode 使用新的 pipeline。banking 任务划分为：
+episode 使用新的 pipeline。`--split` 读取 `configs/banking_dev_test_split.json`
+中的 banking 划分（由 `scripts/make_dev_test_split.py` 生成，seed 6101；可用
+`--split-file` 换成别的文件）：
 
-- `--split dev`：`user_task_0` 到 `user_task_7`，用于 Judge 校准、选择 `tau0`
-  和构建 q table；
-- `--split test`：`user_task_8` 到 `user_task_15`，只用于最终运行，设置沿用
-  dev 阶段冻结的结果。
+- `--split dev`：任务 1、2、5、6、8、9、10、11、12、14，用于 Judge 校准、选择
+  `tau0` 和构建 q table；
+- `--split test`：任务 0、3、4、7、13、15，只用于最终运行，设置沿用 dev 阶段
+  冻结的结果。
+
+划分是分层的：四类 banking 任务在两边都有，近似重复的两对任务（2 和 12、3 和 4）
+放在同一边，避免在其中一个上调参影响另一个的 test 分数。
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\run_batch.py `
