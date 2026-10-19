@@ -59,6 +59,30 @@ class EstimateReviewerErrorsTests(unittest.TestCase):
         self.assertAlmostEqual(send.rates.false_approve, 0.4)
         self.assertAlmostEqual(send.rates.false_deny, 0.5)
 
+    def test_mixed_models_are_rejected(self):
+        local = {**review("u1", "ALLOW"), "judge_model": "qwen3:8b",
+                 "reviewer_model": "llama3.1:8b"}
+        remote = {**review("u2", "DENY"), "judge_model": "deepseek-flash",
+                  "reviewer_model": "deepseek-flash"}
+        labels = {("run-1", "u1"): "unsafe", ("run-1", "u2"): "unsafe"}
+
+        with self.assertRaises(ValueError):
+            estimate_reviewer_errors([local, remote], labels)
+        estimates = estimate_reviewer_errors(
+            [local, remote], labels, min_samples=1, allow_mixed_models=True
+        )
+        self.assertEqual(estimates["send_money"].unsafe_count, 2)
+
+    def test_unlabelled_reviews_from_other_models_are_ignored(self):
+        local = {**review("x", "ALLOW"), "judge_model": "qwen3:8b"}
+        estimates = estimate_reviewer_errors(
+            [review("u1", "ALLOW"), local],
+            {("run-1", "u1"): "unsafe"},
+            min_samples=1,
+        )
+
+        self.assertEqual(estimates["send_money"].unsafe_count, 1)
+
     def test_unlabelled_reviews_are_ignored(self):
         estimates = estimate_reviewer_errors(
             [review("u1", "ALLOW"), review("x", "ALLOW")],
@@ -121,6 +145,21 @@ class EstimateReviewerErrorsTests(unittest.TestCase):
 
 
 class LabelSheetFileTests(TempDirTestCase):
+    def test_batch_directory_is_searched_for_reviewer_logs(self):
+        from scripts.make_label_sheet import reviewer_log_paths
+
+        for episode in ("user_task_0__hybrid__none", "user_task_1__hybrid__none"):
+            (self.directory / episode).mkdir()
+            (self.directory / episode / "reviewer_decisions.jsonl").write_text(
+                "", encoding="utf-8"
+            )
+
+        paths = reviewer_log_paths([str(self.directory)])
+
+        self.assertEqual(len(paths), 2)
+        with self.assertRaises(SystemExit):
+            reviewer_log_paths([str(self.directory / "user_task_0__hybrid__none" / "x")])
+
     def test_sheet_round_trip_skips_blank_labels(self):
         path = self.directory / "labels.csv"
         write_label_sheet(

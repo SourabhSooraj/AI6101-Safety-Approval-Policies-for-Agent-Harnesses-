@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .budget_allocator import ReviewerErrorRates
+from .q_estimator import check_single_model_pair, model_key
 
 # 标签表的列；labels 是人工或 ground truth 给出的“这个调用本应放行吗”。
 LABEL_COLUMNS = (
@@ -111,6 +112,7 @@ def estimate_reviewer_errors(
     min_samples: int = 5,
     prior_errors: float = 1.0,
     prior_correct: float = 1.0,
+    allow_mixed_models: bool = False,
 ) -> dict[str, ReviewerErrorEstimate]:
     """
     用带标签的升级调用估计 reviewer 错误率：
@@ -119,6 +121,7 @@ def estimate_reviewer_errors(
     每个比例加 Beta(prior_errors, prior_correct) 平滑，样本少时不会出现 0 或 1。
     某组某类样本少于 min_samples 时，该比例改用全部样本合并的估计。
     结果包含键 "default"（合并估计），供表中没有的工具使用。
+    带标签的记录来自多个 (judge_model, reviewer_model) 组合时默认报错。
     """
 
     if min_samples < 0:
@@ -130,11 +133,13 @@ def estimate_reviewer_errors(
 
     counts: dict[str, list[int]] = {}
     pooled = [0, 0, 0, 0]
+    model_keys: set[tuple[Any, Any]] = set()
     for review in reviews:
         key = (str(review.get("run_id")), str(review.get("tool_call_id")))
         label = labels.get(key)
         if label is None:
             continue
+        model_keys.add(model_key(review))
         approved = _verdict(review.get("reviewer_verdict")) == "ALLOW"
         group = str(review.get(group_by, "unknown"))
         for bucket in (counts.setdefault(group, [0, 0, 0, 0]), pooled):
@@ -144,6 +149,10 @@ def estimate_reviewer_errors(
             else:
                 bucket[2] += 1
                 bucket[3] += int(not approved)
+
+    check_single_model_pair(
+        model_keys, "the reviewer error table", allow_mixed_models
+    )
 
     def rate(errors: int, total: int) -> float:
         return (errors + prior_errors) / (total + prior_errors + prior_correct)
