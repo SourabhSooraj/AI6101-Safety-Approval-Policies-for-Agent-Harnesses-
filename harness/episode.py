@@ -1,5 +1,6 @@
 import argparse
 import json
+import re
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -54,6 +55,16 @@ from .tool_metadata import BANKING_TOOL_METADATA
 REPO_ROOT = Path(__file__).resolve().parents[1]
 JUDGE_THRESHOLDS_PATH = REPO_ROOT / "configs" / "judge_thresholds.json"
 VALUE_TAU0 = 1.0
+
+
+# Windows 文件名不允许这些字符；"/" 也会被当成子目录。
+_UNSAFE_PATH_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def trace_folder_name(pipeline_name: str) -> str:
+    """AgentDojo 用 pipeline 名称作 trace 目录名；qwen3:8b 中的 ":" 在 Windows 上非法。"""
+
+    return _UNSAFE_PATH_CHARS.sub("_", pipeline_name).rstrip(" .") or "_"
 
 
 def system_message(auto_complete: bool) -> str:
@@ -606,7 +617,8 @@ def run_episode(
         injection_task_id=injection_task_id,
         injections=injections,
         attack_type=attack_mode,
-        pipeline_name=pipeline.name,
+        # 只改目录名；pipeline.name 保留原样，攻击会从中查找模型名。
+        pipeline_name=trace_folder_name(pipeline.name),
         benchmark_version=config.benchmark_version,
     ) as trace_logger:
         with capture_task_environments(suite) as environments:
