@@ -43,7 +43,7 @@ from .policy_context import PolicyContextInitializer
 from .policy_engine import PolicyEngine
 from .policy_gate_executor import PolicyGateToolsExecutor
 from .q_estimator import load_q_table
-from .run_contract import contract_fields, ground_truth_calls
+from .run_contract import contract_fields, current_values, ground_truth_calls
 from .simulated_reviewer import SimulatedReviewer
 from .strict_utility import (
     UTILITY_PASSES_WITHOUT_ACTION,
@@ -663,6 +663,7 @@ def run_episode(
                 if metadata.side_effect == "read"
             ),
             strict_utility=task_done,
+            current=current_values(pre_environment),
         ),
         # Judge 成本在 policy 日志，reviewer 成本在 reviewer 日志。
         "agent_usage": asdict(agent_llm.total_usage),
