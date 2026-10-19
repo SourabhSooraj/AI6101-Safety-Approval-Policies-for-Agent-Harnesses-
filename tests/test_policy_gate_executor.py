@@ -355,6 +355,9 @@ class PolicyGateExecutorTests(unittest.TestCase):
             self.assertEqual(record["event_type"], "reviewer_decision")
             self.assertEqual(record["reviewer_verdict"], "DENY")
             self.assertEqual(record["decision"], "REQUIRE_APPROVAL")
+            # 成功的 review 没有错误信息；失败时这里是 API 或解析错误。
+            self.assertIn("reviewer_error", record)
+            self.assertIsNone(record["reviewer_error"])
 
     def test_reviewer_log_records_reviewer_cost(self):
         class FakeRuntime:

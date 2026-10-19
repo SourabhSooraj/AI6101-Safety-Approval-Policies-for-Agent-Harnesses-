@@ -32,6 +32,7 @@ from .deepseek_agent_llm import DeepSeekAgentLLM
 from .deepseek_judge_client import DeepSeekJudgeClient
 from .llm_judge import LLMJudge
 from .llm_providers import (
+    LOCAL_SERVERS,
     PROVIDERS,
     is_local_base_url,
     resolve_api_key,
@@ -43,6 +44,11 @@ from .policy_engine import PolicyEngine
 from .policy_gate_executor import PolicyGateToolsExecutor
 from .q_estimator import load_q_table
 from .simulated_reviewer import SimulatedReviewer
+from .strict_utility import (
+    UTILITY_PASSES_WITHOUT_ACTION,
+    capture_task_environments,
+    strict_utility,
+)
 from .tool_metadata import BANKING_TOOL_METADATA
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -74,6 +80,7 @@ class EpisodeConfig:
     agent_api_key: str
     agent_thinking: bool
     send_thinking_param: bool
+    local_server: str
     auto_complete: bool
     judge_model: str
     judge_base_url: str
@@ -102,6 +109,7 @@ class EpisodeConfig:
 
         return {
             "provider": self.provider,
+            "local_server": self.local_server if self.uses_local_model else None,
             "agent_model": self.agent_model,
             "agent_base_url": self.agent_base_url,
             "judge_model": self.judge_model,
@@ -149,7 +157,16 @@ def add_episode_args(parser: argparse.ArgumentParser) -> None:
         help=(
             "Default models and endpoint. deepseek: deepseek-flash for all "
             "three roles. ollama: qwen3:8b agent and Judge, llama3.1:8b "
-            "reviewer, on a local Ollama server (free)."
+            "reviewer, on a local Ollama server (free). vllm: Qwen/Qwen3-8B "
+            "for all three roles on a local vLLM server (free)."
+        ),
+    )
+    parser.add_argument(
+        "--local-server",
+        choices=LOCAL_SERVERS,
+        help=(
+            "Kind of server behind localhost URLs; it decides how thinking is "
+            "switched off. Defaults to vllm for --provider vllm, else ollama."
         ),
     )
     parser.add_argument(
@@ -375,6 +392,7 @@ def config_from_args(args: argparse.Namespace) -> EpisodeConfig:
         agent_api_key=agent_api_key,
         agent_thinking=args.agent_thinking,
         send_thinking_param=send_thinking_param,
+        local_server=args.local_server or defaults.local_server,
         auto_complete=not args.no_auto_complete,
         judge_model=args.judge_model or agent_model,
         judge_base_url=judge_base_url,
@@ -500,6 +518,7 @@ def run_episode(
             api_key=config.judge_api_key,
             temperature=config.judge_temperature,
             timeout=config.request_timeout,
+            local_server=config.local_server,
         ),
         sample_count=config.sample_count,
         model_name=config.judge_model,
@@ -510,6 +529,7 @@ def run_episode(
             base_url=config.reviewer_base_url,
             api_key=config.reviewer_api_key,
             timeout=config.request_timeout,
+            local_server=config.local_server,
         ),
         model_name=f"{config.reviewer_model}-reviewer",
     )
@@ -550,6 +570,7 @@ def run_episode(
         temperature=0.0,
         thinking=config.agent_thinking,
         send_thinking_param=config.send_thinking_param,
+        local_server=config.local_server,
     )
     pipeline = AgentPipeline(
         [
@@ -588,12 +609,13 @@ def run_episode(
         pipeline_name=pipeline.name,
         benchmark_version=config.benchmark_version,
     ) as trace_logger:
-        utility, security = suite.run_task_with_pipeline(
-            pipeline,
-            task,
-            injection_task=injection_task,
-            injections=injections,
-        )
+        with capture_task_environments(suite) as environments:
+            utility, security = suite.run_task_with_pipeline(
+                pipeline,
+                task,
+                injection_task=injection_task,
+                injections=injections,
+            )
         trace_logger.set_contextarg("utility", utility)
         trace_logger.set_contextarg("security", security)
 
@@ -605,6 +627,14 @@ def run_episode(
         **log_context,
         "q_table_path": config.q_table_path,
         "utility": utility,
+        # 官方检查有误的任务（5、6）用严格检查；评估脚本应以此为准。
+        "strict_utility": strict_utility(
+            task_id,
+            utility,
+            environments.get("pre"),
+            environments.get("post"),
+        ),
+        "utility_passes_without_action": task_id in UTILITY_PASSES_WITHOUT_ACTION,
         "attack_succeeded": attack_succeeded,
         # Judge 成本在 policy 日志，reviewer 成本在 reviewer 日志。
         "agent_usage": asdict(agent_llm.total_usage),

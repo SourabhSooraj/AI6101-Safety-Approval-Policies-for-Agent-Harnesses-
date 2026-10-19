@@ -66,6 +66,8 @@ class PolicyResult:
     stage: str = "p1"
     judge_success: bool | None = None
     judge_disagreement: bool | None = None
+    # Judge 请求或解析失败时的错误信息（如 HTTP 401/404），便于排查 fail-closed。
+    judge_error: str | None = None
     model_name: str = ""
     input_tokens: int = 0
     output_tokens: int = 0

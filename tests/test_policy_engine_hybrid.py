@@ -49,7 +49,31 @@ def external_metadata() -> ToolMetadata:
     )
 
 
+class FailingJudgeClient:
+    def complete(self, prompt: str) -> str:
+        raise RuntimeError("Error code: 401 - invalid api key")
+
+
 class PolicyEngineHybridTests(unittest.TestCase):
+    def test_judge_error_is_kept_in_result_and_log(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log_path = Path(directory) / "decisions.jsonl"
+            engine = PolicyEngine(
+                judge=LLMJudge(FailingJudgeClient(), sample_count=1),
+                allocator=BudgetAllocator(tau0=1.0),
+                decision_logger=DecisionLogger(log_path),
+            )
+
+            result = engine.evaluate(
+                request_for("send_money", external_metadata())
+            )
+            record = json.loads(log_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(result.policy_name, "p6_force_escalation")
+        self.assertFalse(result.judge_success)
+        self.assertIn("401", result.judge_error)
+        self.assertIn("401", record["judge_error"])
+
     def test_read_only_bypasses_judge(self):
         client = SequenceJudgeClient([])
         engine = PolicyEngine(

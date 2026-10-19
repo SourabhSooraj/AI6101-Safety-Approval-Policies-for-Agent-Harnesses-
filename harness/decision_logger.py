@@ -52,6 +52,7 @@ class DecisionLogger:
             ),
             "judge_success": result.judge_success,
             "judge_disagreement": result.judge_disagreement,
+            "judge_error": result.judge_error,
             "model_name": result.model_name,
             "input_tokens": result.input_tokens,
             "output_tokens": result.output_tokens,

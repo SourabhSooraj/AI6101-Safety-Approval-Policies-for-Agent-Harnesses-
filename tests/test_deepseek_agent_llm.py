@@ -125,6 +125,21 @@ class DeepSeekAgentLLMTests(unittest.TestCase):
         self.assertEqual(request["reasoning_effort"], "none")
         self.assertNotIn("extra_body", request)
 
+    def test_vllm_disables_thinking_with_chat_template(self):
+        client = FakeDeepSeekClient()
+        client.base_url = "http://127.0.0.1:11535/v1/"
+        llm = DeepSeekAgentLLM(client, "Qwen/Qwen3-8B", local_server="vllm")
+
+        llm.query(query="Pay the bill.", runtime=FunctionsRuntime({}))
+
+        request = client.completions.calls[0]
+        self.assertEqual(
+            request["extra_body"],
+            {"chat_template_kwargs": {"enable_thinking": False}},
+        )
+        self.assertNotIn("reasoning_effort", request)
+        self.assertEqual(request["temperature"], 0.0)
+
     def test_non_deepseek_api_gets_no_thinking_field(self):
         client = FakeDeepSeekClient()
         llm = DeepSeekAgentLLM(

@@ -5,7 +5,9 @@ from openai import OpenAI
 from .cost import TokenUsage, usage_from_openai_response
 from .llm_providers import (
     DEEPSEEK_BASE_URL,
+    is_dashscope_api,
     is_local_base_url,
+    local_thinking_off_args,
     resolve_api_key,
     strip_think,
     thinking_switch,
@@ -16,7 +18,8 @@ class DeepSeekJudgeClient:
     """
     通过 OpenAI-compatible API 调用 Judge / reviewer 模型的 JudgeClient 适配器。
 
-    默认连接 DeepSeek；base_url 指向本地 Ollama 时无需 API Key。
+    默认连接 DeepSeek；base_url 指向本地 Ollama 时无需 API Key；
+    指向阿里云百炼时用 enable_thinking 关闭思考模式。
     """
 
     def __init__(
@@ -29,6 +32,7 @@ class DeepSeekJudgeClient:
         timeout: float = 60.0,
         cost_period: str = "auto",
         openai_client: Any | None = None,
+        local_server: str = "ollama",
     ) -> None:
         # 只在创建真实客户端时读取 Key，避免无 Key 的单元测试和 P1-only 运行失败。
         resolved_api_key = None
@@ -37,6 +41,7 @@ class DeepSeekJudgeClient:
 
         self.model = model
         self.base_url = base_url
+        self.local_server = local_server
         self.temperature = temperature
         self.cost_period = cost_period
         self.last_usage: TokenUsage | None = None
@@ -46,24 +51,29 @@ class DeepSeekJudgeClient:
             timeout=timeout,
         )
 
+    def _thinking_off_args(self) -> tuple[str, dict]:
+        """返回 (提示末尾的软开关, 额外请求参数)，用于关闭思考模式。"""
+
+        if is_dashscope_api(self.base_url):
+            # 百炼上开源 Qwen3、glm-5.1 等默认开启思考，部分模型思考时只支持流式调用；
+            # 显式关闭后可以非流式调用，json_object 输出也更稳定。
+            return "", {"extra_body": {"enable_thinking": False}}
+        if is_local_base_url(self.base_url):
+            # Ollama 上 qwen3 一边思考一边受 JSON 约束时常返回空的 {}。
+            return thinking_switch(self.model), local_thinking_off_args(
+                self.local_server
+            )
+        return thinking_switch(self.model), {}
+
     def complete(self, prompt: str) -> str:
-        # JSON Output 配合 LLMJudge 的严格解析器使用；Ollama 也支持 json_object。
+        # JSON Output 配合 LLMJudge 的严格解析器使用；Ollama 和百炼也支持 json_object。
+        switch, thinking_args = self._thinking_off_args()
         response = self.client.chat.completions.create(
             model=self.model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt + thinking_switch(self.model),
-                }
-            ],
+            messages=[{"role": "user", "content": prompt + switch}],
             temperature=self.temperature,
             response_format={"type": "json_object"},
-            # Ollama 上 qwen3 一边思考一边受 JSON 约束时常返回空的 {}。
-            **(
-                {"reasoning_effort": "none"}
-                if is_local_base_url(self.base_url)
-                else {}
-            ),
+            **thinking_args,
         )
         self.last_usage = usage_from_openai_response(
             response,
