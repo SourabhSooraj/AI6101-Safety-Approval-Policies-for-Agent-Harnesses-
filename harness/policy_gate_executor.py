@@ -146,6 +146,7 @@ class PolicyGateToolsExecutor(ToolsExecutor):
                                 ),
                                 "reviewer_success": review_result.success,
                                 "reviewer_reason": review_result.reason,
+                                "reviewer_error": review_result.error,
                                 # 覆盖 policy 日志中的 Judge 成本，两份日志相加时不重复计数。
                                 **self._reviewer_usage_fields(review_result),
                             },

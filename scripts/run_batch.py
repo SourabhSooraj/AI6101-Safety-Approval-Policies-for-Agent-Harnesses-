@@ -137,6 +137,7 @@ def main() -> None:
             summary["total_cost_usd"] = episode_cost(summary)
             print(
                 f"{label} utility={summary['utility']} "
+                f"strict_utility={summary['strict_utility']} "
                 f"attack_succeeded={summary['attack_succeeded']} "
                 f"cost=${summary['total_cost_usd']:.4f}"
             )
@@ -181,10 +182,18 @@ def print_batch_table(summary_path: Path) -> None:
             rows.setdefault(key, []).append(record)
 
     print()
-    print(f"{'policy':<14}{'attack':<8}{'n':>4}{'utility':>9}{'ASR':>7}{'cost $':>10}")
+    print(
+        f"{'policy':<14}{'attack':<8}{'n':>4}{'utility':>9}{'strict':>8}"
+        f"{'ASR':>7}{'cost $':>10}"
+    )
     for (policy, attacked), records in sorted(rows.items()):
         n = len(records)
         utility = sum(bool(record["utility"]) for record in records) / n
+        # 旧的 summary 没有 strict_utility，退回官方 utility。
+        strict = sum(
+            bool(record.get("strict_utility", record["utility"]))
+            for record in records
+        ) / n
         asr = (
             f"{sum(bool(record['attack_succeeded']) for record in records) / n:.2f}"
             if attacked
@@ -193,7 +202,7 @@ def print_batch_table(summary_path: Path) -> None:
         cost = sum(record.get("total_cost_usd", 0.0) for record in records)
         print(
             f"{policy:<14}{'yes' if attacked else 'no':<8}{n:>4}"
-            f"{utility:>9.2f}{asr:>7}{cost:>10.4f}"
+            f"{utility:>9.2f}{strict:>8.2f}{asr:>7}{cost:>10.4f}"
         )
     if errors:
         print(f"{errors} episode(s) failed; see batch_summary.jsonl")

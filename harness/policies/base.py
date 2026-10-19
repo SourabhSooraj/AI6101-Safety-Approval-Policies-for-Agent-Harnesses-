@@ -26,6 +26,7 @@ def attach_judge_metadata(
         result,
         judge_success=judge_result.success,
         judge_disagreement=judge_result.disagreement,
+        judge_error=judge_result.error,
         model_name=usage.model if usage is not None else fallback_model,
         input_tokens=usage.input_tokens if usage is not None else 0,
         output_tokens=usage.output_tokens if usage is not None else 0,

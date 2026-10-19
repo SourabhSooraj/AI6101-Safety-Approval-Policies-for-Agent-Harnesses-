@@ -17,7 +17,8 @@ P6_POLICIES = frozenset({"hybrid", "no_budget"})
 
 # Options passed unchanged to run_agentdojo_e2e.py when given.
 PASSTHROUGH_OPTIONS = (
-    ("--provider", "Default models and endpoint: deepseek or ollama."),
+    ("--provider", "Default models and endpoint: deepseek, ollama or vllm."),
+    ("--local-server", "Kind of server behind localhost URLs: ollama or vllm."),
     ("--sample-count", "Judge samples per call."),
     ("--request-timeout", "Seconds per LLM request."),
     ("--model", "Agent model."),

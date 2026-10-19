@@ -92,6 +92,65 @@ class DeepSeekJudgeClientTests(unittest.TestCase):
         self.assertEqual(local.completions.calls[0]["reasoning_effort"], "none")
         self.assertNotIn("reasoning_effort", remote.completions.calls[0])
 
+    def test_vllm_turns_thinking_off_with_chat_template(self):
+        sdk_client = FakeOpenAIClient('{"risk_score": 0.7}')
+        DeepSeekJudgeClient(
+            model="Qwen/Qwen3-8B",
+            base_url="http://127.0.0.1:11535/v1",
+            openai_client=sdk_client,
+            local_server="vllm",
+        ).complete("judge this call")
+
+        call = sdk_client.completions.calls[0]
+        self.assertEqual(
+            call["extra_body"],
+            {"chat_template_kwargs": {"enable_thinking": False}},
+        )
+        # vLLM 拒绝 reasoning_effort="none"，所以不能发送。
+        self.assertNotIn("reasoning_effort", call)
+        self.assertEqual(call["response_format"], {"type": "json_object"})
+
+    def test_dashscope_turns_thinking_off_with_enable_thinking(self):
+        sdk_client = FakeOpenAIClient('{"risk_score": 0.7}')
+        DeepSeekJudgeClient(
+            model="qwen3-8b",
+            base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+            openai_client=sdk_client,
+        ).complete("judge this call")
+
+        call = sdk_client.completions.calls[0]
+        self.assertEqual(call["extra_body"], {"enable_thinking": False})
+        self.assertNotIn("reasoning_effort", call)
+        self.assertEqual(call["messages"][0]["content"], "judge this call")
+        self.assertEqual(call["response_format"], {"type": "json_object"})
+
+    def test_deepseek_sends_no_thinking_fields(self):
+        sdk_client = FakeOpenAIClient('{"risk_score": 0.7}')
+        DeepSeekJudgeClient(openai_client=sdk_client).complete("judge this call")
+
+        call = sdk_client.completions.calls[0]
+        self.assertNotIn("extra_body", call)
+        self.assertNotIn("reasoning_effort", call)
+
+    def test_dashscope_usage_is_priced(self):
+        usage = SimpleNamespace(
+            prompt_tokens=1_000,
+            completion_tokens=100,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=0),
+        )
+        client = DeepSeekJudgeClient(
+            model="glm-5.1",
+            base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+            openai_client=FakeOpenAIClient('{"approve": true}', usage=usage),
+        )
+
+        client.complete("review this call")
+
+        self.assertAlmostEqual(
+            client.last_usage.estimated_cost_usd,
+            1_000 / 1e6 * 1.4 + 100 / 1e6 * 4.4,
+        )
+
     def test_think_only_response_raises(self):
         client = DeepSeekJudgeClient(
             model="qwen3:8b",

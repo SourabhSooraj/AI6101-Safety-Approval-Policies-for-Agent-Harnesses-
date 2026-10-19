@@ -108,6 +108,7 @@ class DeepSeekAgentLLM(OpenAILLM):
         thinking: bool = False,
         cost_period: str = "auto",
         send_thinking_param: bool = True,
+        local_server: str = "ollama",
     ) -> None:
         # 思考开关只发给 DeepSeek API（extra_body.thinking）和本地 Ollama
         # （reasoning_effort）；其他 OpenAI-compatible 服务可能拒绝这些字段。
@@ -123,6 +124,7 @@ class DeepSeekAgentLLM(OpenAILLM):
         )
         self.thinking = thinking
         self.send_thinking_param = send_thinking_param
+        self.local_server = local_server
         self.cost_period = cost_period
         # 累计 agent 自身的 token 和成本；Judge/reviewer 成本记录在决策日志中。
         self.total_usage = TokenUsage.zero(self.model)
@@ -160,6 +162,7 @@ class DeepSeekAgentLLM(OpenAILLM):
                     str(getattr(self.client, "base_url", "")),
                     self.thinking,
                     self.reasoning_effort,
+                    self.local_server,
                 )
             )
         if openai_tools:

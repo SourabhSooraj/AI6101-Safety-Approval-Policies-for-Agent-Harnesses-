@@ -5,11 +5,20 @@ from urllib.parse import urlparse
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 OLLAMA_BASE_URL = "http://localhost:11434/v1"
+# 阿里云百炼（Model Studio / DashScope）国际站（新加坡）的 OpenAI-compatible 地址。
+# API Key 按地域区分：新加坡的 Key 只能用于这个地址。
+QWEN_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 
 # Ollama 不校验 Key，但 OpenAI SDK 要求非空字符串。
 LOCAL_PLACEHOLDER_API_KEY = "ollama"
 
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
+# 旧域名 dashscope(-intl).aliyuncs.com，以及新的 {WorkspaceId}.<region>.maas.aliyuncs.com。
+_DASHSCOPE_HOSTS = (
+    "dashscope.aliyuncs.com",
+    "dashscope-intl.aliyuncs.com",
+    "maas.aliyuncs.com",
+)
 _THINK_BLOCK = re.compile(r"<think>.*?(?:</think>|\Z)", flags=re.DOTALL)
 
 
@@ -26,7 +35,12 @@ class ProviderDefaults:
     reviewer_model: str | None
     api_key_env: str
     request_timeout: float
+    # 本地服务的种类决定如何关闭思考模式（见 thinking_request_args）。
+    local_server: str = "ollama"
 
+
+VLLM_BASE_URL = "http://localhost:8000/v1"
+LOCAL_SERVERS = ("ollama", "vllm")
 
 PROVIDERS: dict[str, ProviderDefaults] = {
     "deepseek": ProviderDefaults(
@@ -44,6 +58,16 @@ PROVIDERS: dict[str, ProviderDefaults] = {
         api_key_env="OLLAMA_API_KEY",
         request_timeout=300.0,
     ),
+    # 不能装 Ollama 的机器（如学校 GPU 服务器）用 pip 安装的 vLLM；模型名是
+    # Hugging Face id，reviewer 默认与 agent 相同（脚本会警告）。
+    "vllm": ProviderDefaults(
+        base_url=VLLM_BASE_URL,
+        agent_model="Qwen/Qwen3-8B",
+        reviewer_model=None,
+        api_key_env="VLLM_API_KEY",
+        request_timeout=300.0,
+        local_server="vllm",
+    ),
 }
 
 
@@ -57,6 +81,16 @@ def is_local_base_url(base_url: str) -> bool:
 def is_deepseek_api(base_url: str) -> bool:
     host = (urlparse(base_url).hostname or "").lower()
     return host == "deepseek.com" or host.endswith(".deepseek.com")
+
+
+def is_dashscope_api(base_url: str) -> bool:
+    """阿里云百炼的 OpenAI-compatible 接口，用顶层 enable_thinking 开关思考模式。"""
+
+    host = (urlparse(base_url).hostname or "").lower()
+    return any(
+        host == suffix or host.endswith("." + suffix)
+        for suffix in _DASHSCOPE_HOSTS
+    )
 
 
 def supports_thinking_switch(base_url: str) -> bool:
@@ -100,18 +134,32 @@ def thinking_switch(model: str) -> str:
     return " /no_think" if model.lower().startswith("qwen3") else ""
 
 
+def local_thinking_off_args(local_server: str) -> dict:
+    """本地服务上关闭思考模式的请求参数。"""
+
+    if local_server == "vllm":
+        return {"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}}
+    return {"reasoning_effort": "none"}
+
+
 def thinking_request_args(
     base_url: str,
     thinking: bool,
     reasoning_effort: str | None = None,
+    local_server: str = "ollama",
 ) -> dict:
     """
     按 provider 生成开关思考模式的请求参数。
 
     Ollama 会静默忽略 DeepSeek 的 extra_body.thinking，较新版本也不再理会
     /no_think；只有 reasoning_effort="none" 能真正关闭 qwen3 的思考。
+    vLLM 不接受 reasoning_effort="none"，改用 Qwen3 聊天模板的 enable_thinking。
     """
 
+    if is_local_base_url(base_url) and local_server == "vllm":
+        return {
+            "extra_body": {"chat_template_kwargs": {"enable_thinking": thinking}}
+        }
     if is_local_base_url(base_url):
         if not thinking:
             return {"reasoning_effort": "none"}
