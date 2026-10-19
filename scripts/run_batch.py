@@ -19,15 +19,42 @@ from harness.episode import (
 )
 from harness.policies import POLICY_VARIANTS
 
-# banking v1.2.2 有 16 个 user task：0-7 用于调参和 q table，8-15 只用于最终测试。
-SPLITS = {
-    "dev": [f"user_task_{index}" for index in range(0, 8)],
-    "test": [f"user_task_{index}" for index in range(8, 16)],
-}
+# dev 用于调参和 q table，test 只用于最终测试。划分由
+# scripts/make_dev_test_split.py 生成（分层抽样，近似重复的任务放在同一边）。
+SPLIT_NAMES = ("dev", "test")
+DEFAULT_SPLIT_FILE = REPO_ROOT / "configs" / "banking_dev_test_split.json"
 NO_ATTACK = "none"
 
 
-def main() -> None:
+def load_split(
+    path: Path,
+    split: str,
+    *,
+    suite: str,
+    benchmark_version: str,
+) -> list[str]:
+    """读取划分文件中的一边；文件与本次运行的 suite / 版本不符时报错。"""
+
+    data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    if (data.get("suite"), data.get("benchmark_version")) != (
+        suite,
+        benchmark_version,
+    ):
+        raise ValueError(
+            f"{path} is a split for {data.get('suite')} "
+            f"{data.get('benchmark_version')}, but this run uses "
+            f"{suite} {benchmark_version}"
+        )
+    dev, test = data.get("dev"), data.get("test")
+    if not dev or not test:
+        raise ValueError(f"{path} needs non-empty 'dev' and 'test' lists")
+    overlap = sorted(set(dev) & set(test))
+    if overlap:
+        raise ValueError(f"{path} puts these tasks on both sides: {overlap}")
+    return list(dev if split == "dev" else test)
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Run every (task, policy, injection task) combination and write "
@@ -36,8 +63,18 @@ def main() -> None:
     )
     add_episode_args(parser)
     tasks = parser.add_mutually_exclusive_group(required=True)
-    tasks.add_argument("--split", choices=sorted(SPLITS))
+    tasks.add_argument(
+        "--split",
+        choices=SPLIT_NAMES,
+        help="Run the dev or test tasks listed in --split-file.",
+    )
     tasks.add_argument("--task-ids", nargs="+", help="Explicit user task ids.")
+    parser.add_argument(
+        "--split-file",
+        type=Path,
+        default=DEFAULT_SPLIT_FILE,
+        help="Dev/test split JSON (default: %(default)s).",
+    )
     parser.add_argument(
         "--policies",
         nargs="+",
@@ -62,9 +99,25 @@ def main() -> None:
         action="store_true",
         help="Print the episodes that would run, without calling any model.",
     )
-    args = parser.parse_args()
+    return parser
 
-    task_ids = SPLITS[args.split] if args.split else args.task_ids
+
+def main(argv: list[str] | None = None) -> None:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.split:
+        try:
+            task_ids = load_split(
+                args.split_file,
+                args.split,
+                suite=args.suite,
+                benchmark_version=args.benchmark_version,
+            )
+        except (OSError, ValueError) as error:
+            parser.error(str(error))
+    else:
+        task_ids = args.task_ids
     episodes = list(
         itertools.product(task_ids, args.policies, args.injection_tasks)
     )
@@ -92,6 +145,7 @@ def main() -> None:
             {
                 **config_record,
                 "split": args.split,
+                "split_file": str(args.split_file) if args.split else None,
                 "task_ids": task_ids,
                 "policies": args.policies,
                 "injection_tasks": args.injection_tasks,
