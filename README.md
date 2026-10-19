@@ -644,6 +644,11 @@ resets on a retry.
 - **Judge and reviewer failures keep their error.** A failed Judge call still
   fails closed (risk 1.0, escalate), and a failed review is still a DENY, but
   the API or parsing error is now logged as `judge_error` / `reviewer_error`.
+- **Trace folder names drop `:`.** AgentDojo names the trace folder after the
+  pipeline (`<agent model>-<policy>`). Local model ids such as `qwen3:8b`
+  contain `:`, which Windows does not allow in file names, so the folder is
+  written as `qwen3_8b-hybrid`. Characters Windows rejects are replaced with
+  `_`. `agent_model` and the other logs keep the real model id.
 
 ## 中文
 
@@ -1216,3 +1221,7 @@ task id 和用户请求开始。每个 episode 都应新建 pipeline（以及新
 - **Judge 和 reviewer 失败时保留错误信息。** Judge 调用失败仍然 fail closed（风险 1.0，
   升级），review 失败仍然是 DENY，但 API 或解析错误会记录为 `judge_error` /
   `reviewer_error`。
+- **trace 目录名去掉 `:`。** AgentDojo 用 pipeline 名称（`<agent 模型>-<policy>`）
+  作为 trace 目录名。`qwen3:8b` 等本地模型 id 含有 Windows 文件名不允许的 `:`，
+  因此目录写作 `qwen3_8b-hybrid`，Windows 不允许的字符都替换为 `_`。
+  `agent_model` 和其他日志仍记录真实的模型 id。
