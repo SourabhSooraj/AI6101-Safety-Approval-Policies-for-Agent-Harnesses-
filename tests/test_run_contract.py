@@ -383,6 +383,10 @@ class ContractFieldsTests(unittest.TestCase):
         ), patch.dict(run_contract.os.environ, {"HARNESS_COMMIT": "abc123"}):
             self.assertEqual(run_contract.current_commit(), "abc123")
 
+    # The Colab live check runs the tests from code.zip, which has no .git.
+    @unittest.skipUnless(
+        (run_contract.REPO_ROOT / ".git").exists(), "code is not a git checkout"
+    )
     def test_commit_is_read_from_git(self):
         run_contract.current_commit.cache_clear()
         self.addCleanup(run_contract.current_commit.cache_clear)
