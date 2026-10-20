@@ -1,0 +1,11 @@
+{
+  "setups": [
+    {"name": "hybrid_k3", "policy": "hybrid", "k": 3},
+    {"name": "hybrid_cost_k3", "policy": "hybrid", "k": 3, "allocator": "cost"},
+    {"name": "p1_only_k3", "policy": "p1_only", "k": 3},
+    {"name": "p4_only_k3", "policy": "p4_only", "k": 3},
+    {"name": "allow_all", "policy": "allow_all"},
+    {"name": "escalate_all_k3", "policy": "escalate_all", "k": 3},
+    {"name": "no_budget", "policy": "no_budget"}
+  ]
+}

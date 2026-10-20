@@ -313,8 +313,9 @@ to `run_summary.json` (`provider`, `agent_model`, `judge_model`,
 
 ### Batch runs and the dev/test split
 
-`scripts/run_batch.py` runs every combination of tasks, policies and injection
-tasks, with a fresh pipeline per episode. `--split` reads the banking split in
+`scripts/run_batch.py` runs every combination of tasks, setups and injection
+tasks. Each episode runs `scripts/run_agentdojo_e2e.py` in its own process, so
+no state is shared between episodes. `--split` reads the banking split in
 `configs/banking_dev_test_split.json` (made by `scripts/make_dev_test_split.py`,
 seed 6101; pick another file with `--split-file`):
 
@@ -336,15 +337,42 @@ side, so tuning on one doesn't leak into the other's test score.
   --k 3
 ```
 
+**Setups.** `--policies` makes one setup per policy, named after it. To compare
+other settings, list named setups in a JSON file and pass it with `--setups`
+(example: `configs/setups/policy_comparison.json`):
+
+```json
+{"setups": [
+  {"name": "hybrid_k3", "policy": "hybrid", "k": 3},
+  {"name": "hybrid_cost_k3", "policy": "hybrid", "k": 3, "allocator": "cost"},
+  {"name": "allow_all", "policy": "allow_all"}
+]}
+```
+
+A setup picks a `policy` and may set `k`, `expected_remaining_risky_calls`,
+`t_low`, `t_high`, `allocator`, `tau0`, `q_table`, `utility_cost`, `auto_rule`,
+`reviewer_error_table` and `sample_count`; `name` defaults to the policy.
+Every setup is checked before the first run, so a misspelt key or a bad value
+stops the batch at once. Model, server and attack flags (`--provider`,
+`--model`, `--judge-model`, `--attack-model-name` and the rest) apply to every
+run: the flags you type are passed on to each run, and anything you leave out
+keeps `run_agentdojo_e2e.py`'s default. A setup's value wins over the same flag
+on the command line. API keys stay in environment variables, which each run
+inherits.
+
 Use `--task-ids user_task_8 user_task_9` instead of `--split` for a small pilot,
-and `--dry-run` to list the episodes without calling any model. Every episode
-writes its own folder `logs/agentdojo_batch/<batch_id>/<task>__<policy>__<injection>/`
-with the same three files as a single e2e run. The batch folder also holds
-`batch_config.json` (all settings, without API keys) and `batch_summary.jsonl`
-(one line per episode, including `total_cost_usd`). At the end the script
-prints utility, attack success rate and cost per policy. One failing episode is
-recorded with an `error` field and does not stop the batch. Pass the same
-`--batch-id` again to resume: finished episodes are skipped.
+and `--dry-run` to list the episodes and their commands without calling any
+model. Every episode writes its own folder
+`logs/agentdojo_batch/<batch_id>/<task>__<setup>__<injection>/` with the same
+three files as a single e2e run, plus `run.log` with that run's output. The
+batch folder also holds `batch_config.json` (all settings and setups, without
+API keys) and `batch_summary.jsonl` (one line per episode, including `setup`
+and `total_cost_usd`). At the end the script prints utility, attack success
+rate and cost per setup. One failing episode is recorded with an `error` field
+(the last line of its `run.log`) and does not stop the batch. Pass the same
+`--batch-id` again to resume: finished episodes are skipped, and failed ones
+run again. Resuming with different model settings is refused, so one batch
+never mixes models; start a new `--batch-id` instead.
 
 Suggested workflow:
 
@@ -967,8 +995,9 @@ reviewer 时，说明端到端链路成功。
 
 ### 批量运行与 dev/test 划分
 
-`scripts/run_batch.py` 运行 task、policy 和 injection task 的所有组合，每个
-episode 使用新的 pipeline。`--split` 读取 `configs/banking_dev_test_split.json`
+`scripts/run_batch.py` 运行 task、setup 和 injection task 的所有组合。每个
+episode 在单独的进程中运行 `scripts/run_agentdojo_e2e.py`，episode 之间不共享
+任何状态。`--split` 读取 `configs/banking_dev_test_split.json`
 中的 banking 划分（由 `scripts/make_dev_test_split.py` 生成，seed 6101；可用
 `--split-file` 换成别的文件）：
 
@@ -989,13 +1018,37 @@ episode 使用新的 pipeline。`--split` 读取 `configs/banking_dev_test_split
   --k 3
 ```
 
+**Setup。** `--policies` 为每个 policy 生成一个同名 setup。要比较其他设置，
+在 JSON 文件中列出命名的 setup，用 `--setups` 传入（示例：
+`configs/setups/policy_comparison.json`）：
+
+```json
+{"setups": [
+  {"name": "hybrid_k3", "policy": "hybrid", "k": 3},
+  {"name": "hybrid_cost_k3", "policy": "hybrid", "k": 3, "allocator": "cost"},
+  {"name": "allow_all", "policy": "allow_all"}
+]}
+```
+
+setup 选择一个 `policy`，并可设置 `k`、`expected_remaining_risky_calls`、
+`t_low`、`t_high`、`allocator`、`tau0`、`q_table`、`utility_cost`、`auto_rule`、
+`reviewer_error_table` 和 `sample_count`；`name` 默认为 policy 名。所有 setup
+在第一次运行前检查，拼错的键或无效的值会立即中止。模型、服务器和攻击参数
+（`--provider`、`--model`、`--judge-model`、`--attack-model-name` 等）对每次
+运行都相同：命令行上写出的参数会传给每次运行，没写的保持
+`run_agentdojo_e2e.py` 的默认值。setup 中的值优先于命令行上的同名参数。
+API Key 保留在环境变量中，由每次运行继承。
+
 小规模试跑时用 `--task-ids user_task_8 user_task_9` 代替 `--split`；`--dry-run`
-只列出 episode，不调用模型。每个 episode 写入单独的文件夹
-`logs/agentdojo_batch/<batch_id>/<task>__<policy>__<injection>/`，内容与单次 e2e
-运行相同。batch 文件夹中还有 `batch_config.json`（所有设置，不含 API Key）和
-`batch_summary.jsonl`（每个 episode 一行，含 `total_cost_usd`）。结束时脚本按
-policy 输出 utility、攻击成功率和成本。单个 episode 失败会记录 `error` 字段，
-不会中断整批。再次传入相同的 `--batch-id` 可以续跑，已完成的 episode 会被跳过。
+只列出 episode 及其命令，不调用模型。每个 episode 写入单独的文件夹
+`logs/agentdojo_batch/<batch_id>/<task>__<setup>__<injection>/`，内容与单次 e2e
+运行相同，另有 `run.log` 保存该次运行的输出。batch 文件夹中还有
+`batch_config.json`（所有设置和 setup，不含 API Key）和 `batch_summary.jsonl`
+（每个 episode 一行，含 `setup` 和 `total_cost_usd`）。结束时脚本按 setup 输出
+utility、攻击成功率和成本。单个 episode 失败会记录 `error` 字段（其 `run.log`
+的最后一行），不会中断整批。再次传入相同的 `--batch-id` 可以续跑：已完成的
+episode 会被跳过，失败的会重新运行。模型设置与上次不同时拒绝续跑，避免一批
+日志混用模型；请改用新的 `--batch-id`。
 
 建议流程：
 
