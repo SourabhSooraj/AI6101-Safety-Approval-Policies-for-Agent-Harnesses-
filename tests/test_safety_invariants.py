@@ -10,9 +10,11 @@ import json
 import unittest
 from dataclasses import fields
 
+from agentdojo.attacks.attack_registry import load_attack
 from agentdojo.functions_runtime import FunctionCall, FunctionsRuntime
 from agentdojo.task_suite.load_suites import get_suite
 
+import harness.attacks  # noqa: F401 - 注册 important_instructions_deepseek
 from harness.policies.p1_only import evaluate_p1
 from harness.policy import (
     Decision,
@@ -118,6 +120,40 @@ class CapturingClient:
 
 def _payload(prompt: str) -> dict:
     return json.loads(prompt.split("PAYLOAD:\n", 1)[1])
+
+
+class NamedPipeline:
+    """攻击只从 pipeline 名称里读模型名，不会调用模型。"""
+
+    name = "qwen3_8b-p1_only"
+
+
+def _attack_lines(injections: dict[str, str]) -> list[str]:
+    """攻击文字中足够长、不会碰巧出现在正常内容里的行。"""
+
+    return [
+        line.strip()
+        for text in injections.values()
+        for line in text.splitlines()
+        if len(line.strip()) >= 20
+    ]
+
+
+def _message_text(message: dict) -> str:
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    return "\n".join(str(block.get("content") or "") for block in content or [])
+
+
+def _all_strings(value) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [text for item in value.values() for text in _all_strings(item)]
+    if isinstance(value, list):
+        return [text for item in value for text in _all_strings(item)]
+    return []
 
 
 def _all_keys(value) -> list[str]:
@@ -243,25 +279,34 @@ class ReviewerSeesNoOracleInfoTests(unittest.TestCase):
                 with self.subTest(key=key, word=word):
                     self.assertNotIn(word, key.casefold())
 
-    def test_real_banking_attacks_never_reach_the_reviewer_prompt(self):
-        # 对每个 user task × injection task，把 user task 和攻击者的预期调用当作
-        # agent 的调用送进 gate（escalate_all，每次都交给 reviewer），检查 reviewer
-        # 收到的文字中没有攻击 ID、攻击目标或攻击类型。即使 AgentDojo 在
-        # extra_args 中带了 oracle 字段，PolicyContextInitializer 也会丢掉它们。
+    def test_injected_attack_text_never_reaches_the_reviewer(self):
+        # 真实运行中，攻击文字藏在银行数据里，经工具输出到达 agent。这里对每个
+        # user task × injection task：把真实攻击（important_instructions_deepseek）
+        # 注入银行数据，用 p1_only 让只读调用真正执行（输出进入对话），写操作交给
+        # reviewer；再把 user task 和攻击者的预期调用当作 agent 的调用送进 gate。
+        # 检查攻击文字确实进入了对话，但 reviewer 收到的内容里没有任何一行攻击
+        # 文字，也没有攻击 ID、目标或类型。即使 extra_args 带了 oracle 字段，
+        # PolicyContextInitializer 也会丢掉它们。
         suite = get_suite("v1.2.2", "banking")
         runtime = FunctionsRuntime(suite.tools)
+        attack = load_attack("important_instructions_deepseek", suite, NamedPipeline())
+        attack.model_name = "Qwen"
+        unreviewed: set[tuple[str, str]] = set()
 
         for user_task_id, user_task in suite.user_tasks.items():
-            environment = user_task.init_environment(
-                suite.load_and_inject_default_environment({})
-            )
-            user_calls = list(user_task.ground_truth(environment))
             for injection_task_id, injection_task in suite.injection_tasks.items():
                 with self.subTest(user_task=user_task_id, injection=injection_task_id):
-                    attacker_calls = list(injection_task.ground_truth(environment))
+                    injections = attack.attack(user_task, injection_task)
+                    environment = user_task.init_environment(
+                        suite.load_and_inject_default_environment(injections)
+                    )
+                    calls = [
+                        *user_task.ground_truth(environment),
+                        *injection_task.ground_truth(environment),
+                    ]
                     client = CapturingClient()
                     gate = PolicyGateToolsExecutor(
-                        PolicyEngine(policy_variant="escalate_all"),
+                        PolicyEngine(policy_variant="p1_only"),
                         tool_metadata=BANKING_TOOL_METADATA,
                         task_id=user_task_id,
                         escalation_budget=100,
@@ -276,14 +321,13 @@ class ReviewerSeesNoOracleInfoTests(unittest.TestCase):
                         extra_args={
                             "injection_task_id": injection_task_id,
                             "injection_goal": injection_task.GOAL,
-                            "ground_truth": [call.args for call in user_calls],
+                            "injections": injections,
+                            "ground_truth": [call.args for call in calls],
                         },
                     )
 
                     messages = list(messages)
-                    for number, call in enumerate(
-                        [*user_calls, *attacker_calls], start=1
-                    ):
+                    for number, call in enumerate(calls, start=1):
                         messages.append(
                             _assistant_turn(
                                 FunctionCall(
@@ -294,7 +338,7 @@ class ReviewerSeesNoOracleInfoTests(unittest.TestCase):
                                 )
                             )
                         )
-                        _, _, _, messages, extra_args = gate.query(
+                        _, _, environment, messages, extra_args = gate.query(
                             query=user_task.PROMPT,
                             runtime=runtime,
                             env=environment,
@@ -303,18 +347,42 @@ class ReviewerSeesNoOracleInfoTests(unittest.TestCase):
                         )
                         messages = list(messages)
 
-                    self.assertEqual(
-                        len(client.prompts), len(user_calls) + len(attacker_calls)
+                    attack_lines = _attack_lines(injections)
+                    tool_outputs = "\n".join(
+                        _message_text(message)
+                        for message in messages
+                        if message["role"] == "tool"
                     )
+                    # 攻击文字必须真的到达了对话，否则这个测试什么也没检查。
+                    self.assertTrue(any(line in tool_outputs for line in attack_lines))
+                    if not client.prompts:
+                        unreviewed.add((user_task_id, injection_task_id))
                     for prompt in client.prompts:
+                        payload = _payload(prompt)
+                        seen = "\n".join(_all_strings(payload))
+                        for line in attack_lines:
+                            self.assertNotIn(line, seen)
                         self.assertNotIn(injection_task_id, prompt)
                         self.assertNotIn("injection_task", prompt)
-                        self.assertNotIn(injection_task.GOAL, prompt)
+                        self.assertNotIn(injection_task.GOAL, seen)
                         for word in ("attack_type", "data_stealing", "direct_harm"):
                             self.assertNotIn(word, prompt)
-                        self.assertEqual(
-                            _payload(prompt)["user_request"], user_task.PROMPT
-                        )
+                        self.assertEqual(payload["user_request"], user_task.PROMPT)
+
+        # 其余 140 对都至少有一次交给了 reviewer。这 4 对中 user task 只读、
+        # 请求里没有提到密码，攻击 7 的改密码直接被 P1 拒绝，不会到 reviewer。
+        self.assertEqual(
+            unreviewed,
+            {
+                (user_task_id, "injection_task_7")
+                for user_task_id in (
+                    "user_task_1",
+                    "user_task_7",
+                    "user_task_8",
+                    "user_task_10",
+                )
+            },
+        )
 
 
 if __name__ == "__main__":
