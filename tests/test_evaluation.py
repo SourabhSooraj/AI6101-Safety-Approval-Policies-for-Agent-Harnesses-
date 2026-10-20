@@ -413,6 +413,11 @@ class EvaluateScriptTests(unittest.TestCase):
 
             for table in evaluate_script.TABLES:
                 self.assertTrue((out / f"{table}.csv").exists(), table)
+            # TCR@k 曲线同时保存为 CSV、PNG 和 PDF。
+            self.assertTrue(
+                (out / "tcr_at_k.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+            )
+            self.assertTrue((out / "tcr_at_k.pdf").read_bytes().startswith(b"%PDF-"))
             data = json.loads((out / "results.json").read_text())
             hybrid = row(data["overview"], setup="hybrid")
             self.assertEqual(hybrid["tcr"]["n"], 4)
@@ -420,6 +425,38 @@ class EvaluateScriptTests(unittest.TestCase):
             header = (out / "overview.csv").read_text().splitlines()[0].split(",")
             self.assertIn("tcr_low", header)
             self.assertIn("Outcomes", printed.getvalue())
+
+    def test_plot_covers_every_k_and_the_unlimited_budget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            batch = BatchBuilder(root, "b1")
+            for k in (0, 1, 3):
+                batch.run("user_task_1", f"hybrid_k{k}", policy="hybrid", k=k)
+            batch.run("user_task_1", "no_budget")
+            rows = evaluate(load_runs([batch.dir])[0])["tcr_at_k"]
+
+            paths = evaluate_script.plot_tcr_at_k(rows, root)
+
+            self.assertEqual(
+                [path.name for path in paths], ["tcr_at_k.png", "tcr_at_k.pdf"]
+            )
+            for path in paths:
+                self.assertGreater(path.stat().st_size, 0)
+
+    def test_pdf_is_the_same_for_the_same_data(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rows = evaluate(load_runs([SAMPLE_BATCH])[0])["tcr_at_k"]
+            first, second = Path(tmp) / "first", Path(tmp) / "second"
+            first.mkdir()
+            second.mkdir()
+
+            evaluate_script.plot_tcr_at_k(rows, first)
+            evaluate_script.plot_tcr_at_k(rows, second)
+
+            self.assertEqual(
+                (first / "tcr_at_k.pdf").read_bytes(),
+                (second / "tcr_at_k.pdf").read_bytes(),
+            )
 
     def test_missing_folder_stops_with_a_message(self):
         with contextlib.redirect_stderr(io.StringIO()):

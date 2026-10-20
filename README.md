@@ -586,7 +586,8 @@ or in code with `PolicyEngine(q_table=load_q_table(path))`.
 ### Evaluating batches
 
 `scripts/evaluate.py` reads one or more batch folders and reports every
-metric with a 95% Wilson interval. It needs only the standard library.
+metric with a 95% Wilson interval. The statistics use only the standard
+library; matplotlib (in `requirements.txt`) draws the TCR@k plot.
 
 ```bash
 python scripts/evaluate.py logs/agentdojo_batch/<batch_id> --out results/dev
@@ -611,9 +612,10 @@ Holm-corrected across all pairs of the same metric.
 
 `--out` writes `results.json` and one CSV per table (`overview`, `tcr_at_k`,
 `hitl`, `cost`, `by_attack_type`, `by_user_task`, `mcnemar`); each rate has
-`_low`, `_high` and `_n` columns. If matplotlib is installed, it also draws
-`tcr_at_k.png`; matplotlib is not a requirement, and without it the curve is
-only written to `tcr_at_k.csv`.
+`_low`, `_high` and `_n` columns. The TCR@k curve is saved three ways: the
+numbers in `tcr_at_k.csv`, and the plot (one line per setup family, with its
+Wilson band) as `tcr_at_k.png` and `tcr_at_k.pdf`. The PDF has no creation
+date, so the same data always gives the same file.
 
 Batches whose agent, Judge or reviewer models differ are refused unless you
 pass `--allow-mixed-models`. Mixing dev and test batches gives a warning. If
@@ -1248,7 +1250,8 @@ reviewer 的真实判断。`stage` 不是 `p6` 的记录（来自 `p1_only` 或 
 ### 评估 batch
 
 `scripts/evaluate.py` 读取一个或多个 batch 文件夹，每个指标都给出 95% Wilson
-区间，只依赖标准库。
+区间。统计部分只用标准库；TCR@k 曲线图用 matplotlib 绘制（已列在
+`requirements.txt` 中）。
 
 ```bash
 python scripts/evaluate.py logs/agentdojo_batch/<batch_id> --out results/dev
@@ -1272,8 +1275,9 @@ setup 之间做成对的精确 McNemar 检验，只用两个 setup **都**完成
 
 `--out` 写入 `results.json` 和每张表一个 CSV（`overview`、`tcr_at_k`、`hitl`、
 `cost`、`by_attack_type`、`by_user_task`、`mcnemar`），每个比例都有 `_low`、
-`_high` 和 `_n` 列。装了 matplotlib 时还会画 `tcr_at_k.png`；matplotlib 不是
-必需的依赖，没有它时曲线只写入 `tcr_at_k.csv`。
+`_high` 和 `_n` 列。TCR@k 曲线保存三份：数值写入 `tcr_at_k.csv`，图（每个 setup
+family 一条线，带 Wilson 区间）保存为 `tcr_at_k.png` 和 `tcr_at_k.pdf`。PDF 不写
+创建时间，同样的数据总是生成同样的文件。
 
 agent、Judge 或 reviewer 模型不同的 batch 默认拒绝合并，传入
 `--allow-mixed-models` 可强制合并。混用 dev 和 test batch 会给出警告。同一 setup
