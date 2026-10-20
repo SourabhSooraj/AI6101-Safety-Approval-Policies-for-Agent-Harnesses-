@@ -39,6 +39,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--injection-task",
         help="AgentDojo injection task id, e.g. injection_task_0. Omit for no attack.",
     )
+    # run_batch.py 为每个子进程指定目录和 run_id；单独运行时保持按时间命名。
+    parser.add_argument(
+        "--log-dir",
+        type=Path,
+        help=(
+            "Folder for this run's logs (default: logs/agentdojo_e2e/<run id>). "
+            "Decision logs in an existing folder are appended to, not replaced; "
+            "use an empty folder."
+        ),
+    )
+    parser.add_argument(
+        "--run-id",
+        help="Run id written to the logs (default: the current UTC time).",
+    )
     return parser
 
 
@@ -47,8 +61,8 @@ def main() -> None:
     config = config_from_args(args)
     print_config_warnings(config)
 
-    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    log_dir = REPO_ROOT / "logs" / "agentdojo_e2e" / run_id
+    run_id = args.run_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    log_dir = args.log_dir or REPO_ROOT / "logs" / "agentdojo_e2e" / run_id
     summary = run_episode(
         config,
         task_id=args.task_id,
