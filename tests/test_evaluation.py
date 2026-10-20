@@ -21,7 +21,10 @@ MODELS = {"agent": "qwen3:8b", "judge": "qwen3:8b", "reviewer": "llama3.1:8b"}
 
 
 class BatchBuilder:
-    """在临时目录中写出 run_batch.py 格式的 batch 文件夹。"""
+    """
+    在临时目录中写出 run_batch.py 格式的 batch 文件夹。
+    Writes batch folders in the run_batch.py layout to a temporary folder.
+    """
 
     def __init__(self, root: Path, name: str, split: str = "dev", models=MODELS):
         self.dir = root / name
@@ -289,6 +292,7 @@ class SyntheticBatchTests(unittest.TestCase):
         self.assertEqual(hitl["auto_denied"], 2)
         self.assertEqual(hitl["runs_out_of_budget"].successes, 1)
         # 失败的 review 不算 reviewer 的判断。
+        # A failed review is not counted as a reviewer judgement.
         self.assertEqual(
             (hitl["reviewer_approved"].successes, hitl["reviewer_approved"].total), (1, 1)
         )
@@ -338,6 +342,7 @@ class SyntheticBatchTests(unittest.TestCase):
         self.assertAlmostEqual(asr["p"], 2 / 256)
         self.assertTrue(asr["significant"])
         # 无攻击的 user_task_1 只有 hybrid 跑了，不能配对。
+        # The no-attack user_task_1 ran only under hybrid, so it has no pair.
         self.assertEqual(row(rows, metric="safe_task_completion")["pairs"], 8)
 
     def test_holm_is_applied_across_pairs_of_one_metric(self):
@@ -414,6 +419,7 @@ class EvaluateScriptTests(unittest.TestCase):
             for table in evaluate_script.TABLES:
                 self.assertTrue((out / f"{table}.csv").exists(), table)
             # TCR@k 曲线同时保存为 CSV、PNG 和 PDF。
+            # The TCR@k curve is saved as CSV, PNG and PDF.
             self.assertTrue(
                 (out / "tcr_at_k.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
             )
