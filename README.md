@@ -357,8 +357,9 @@ stops the batch at once. Model, server and attack flags (`--provider`,
 `--model`, `--judge-model`, `--attack-model-name` and the rest) apply to every
 run: the flags you type are passed on to each run, and anything you leave out
 keeps `run_agentdojo_e2e.py`'s default. A setup's value wins over the same flag
-on the command line. API keys stay in environment variables, which each run
-inherits.
+on the command line. Relative `q_table` and `reviewer_error_table` paths, on the
+command line or in a setups file, are read from the folder you run the command
+in. API keys stay in environment variables, which each run inherits.
 
 Use `--task-ids user_task_8 user_task_9` instead of `--split` for a small pilot,
 and `--dry-run` to list the episodes and their commands without calling any
@@ -371,8 +372,11 @@ and `total_cost_usd`). At the end the script prints utility, attack success
 rate and cost per setup. One failing episode is recorded with an `error` field
 (the last line of its `run.log`) and does not stop the batch. Pass the same
 `--batch-id` again to resume: finished episodes are skipped, and failed ones
-run again. Resuming with different model settings is refused, so one batch
-never mixes models; start a new `--batch-id` instead.
+run again; `batch_summary.jsonl` keeps only the latest line for each episode,
+so an old error disappears once a retry succeeds. Resuming with different
+settings is refused: models, `--no-auto-complete`, any flag passed on to the
+runs (such as `--k`) and the setups must all match the first start, so one
+batch never mixes settings. Start a new `--batch-id` instead.
 
 Suggested workflow:
 
@@ -1037,7 +1041,8 @@ setup 选择一个 `policy`，并可设置 `k`、`expected_remaining_risky_calls
 （`--provider`、`--model`、`--judge-model`、`--attack-model-name` 等）对每次
 运行都相同：命令行上写出的参数会传给每次运行，没写的保持
 `run_agentdojo_e2e.py` 的默认值。setup 中的值优先于命令行上的同名参数。
-API Key 保留在环境变量中，由每次运行继承。
+命令行或 setup 文件中相对的 `q_table` 和 `reviewer_error_table` 路径，按运行命令时
+所在的目录解析。API Key 保留在环境变量中，由每次运行继承。
 
 小规模试跑时用 `--task-ids user_task_8 user_task_9` 代替 `--split`；`--dry-run`
 只列出 episode 及其命令，不调用模型。每个 episode 写入单独的文件夹
@@ -1047,8 +1052,10 @@ API Key 保留在环境变量中，由每次运行继承。
 （每个 episode 一行，含 `setup` 和 `total_cost_usd`）。结束时脚本按 setup 输出
 utility、攻击成功率和成本。单个 episode 失败会记录 `error` 字段（其 `run.log`
 的最后一行），不会中断整批。再次传入相同的 `--batch-id` 可以续跑：已完成的
-episode 会被跳过，失败的会重新运行。模型设置与上次不同时拒绝续跑，避免一批
-日志混用模型；请改用新的 `--batch-id`。
+episode 会被跳过，失败的会重新运行；`batch_summary.jsonl` 中每个 episode 只保留
+最后一行，重跑成功后旧的错误记录随之消失。设置与第一次不同时拒绝续跑：模型、
+`--no-auto-complete`、传给每次运行的参数（如 `--k`）和 setup 都必须相同，避免
+同一批混用不同设置；请改用新的 `--batch-id`。
 
 建议流程：
 

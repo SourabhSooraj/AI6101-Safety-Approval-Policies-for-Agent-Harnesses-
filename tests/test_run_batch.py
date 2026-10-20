@@ -206,6 +206,16 @@ class FlagForwardingTests(unittest.TestCase):
         # 解析器的默认值在之后仍然可用。
         self.assertEqual(parser.parse_args(["--task-ids", "x"]).k, 3)
 
+    def test_relative_paths_are_made_absolute_from_the_current_folder(self):
+        setup = Setup(name="s", policy="hybrid", options={"q_table": "tables/q.json"})
+
+        flags = setup_flags(setup)
+
+        self.assertEqual(
+            flags[flags.index("--q-table") + 1],
+            str((Path.cwd() / "tables" / "q.json").resolve()),
+        )
+
     def test_setup_flags_come_after_and_override_model_flags(self):
         setup = Setup(name="s", policy="p4_only", options={"k": 1, "t_low": 0.2})
 
@@ -262,10 +272,11 @@ class ProcessPerRunTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
         self.batch_dir = Path(self.tmp.name) / "logs" / "agentdojo_batch" / "b1"
 
-    def run_batch(self, child, *extra, stderr=None):
+    def run_batch(self, child, *extra, stderr=None, setups=None):
         argv = [
             "--task-ids", "user_task_1", "user_task_2",
-            "--policies", "hybrid", "allow_all",
+            *(["--setups", str(setups)] if setups else
+              ["--policies", "hybrid", "allow_all"]),
             "--provider", "ollama",
             "--batch-id", "b1",
             *extra,
@@ -330,6 +341,65 @@ class ProcessPerRunTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.run_batch(FakeChild(), "--model", "llama3.1:8b", stderr=err)
         self.assertIn("agent_model", err.getvalue())
+
+    def assert_resume_refused(
+        self, first, second, expected, first_setups=None, second_setups=None
+    ):
+        self.run_batch(
+            FakeChild(crash_tasks={"user_task_2"}), *first, setups=first_setups
+        )
+        err = io.StringIO()
+        with self.assertRaises(SystemExit):
+            self.run_batch(FakeChild(), *second, stderr=err, setups=second_setups)
+        self.assertIn(expected, err.getvalue())
+
+    def test_resuming_with_another_k_is_refused(self):
+        self.assert_resume_refused(["--k", "3"], ["--k", "1"], "flags")
+
+    def test_resuming_with_auto_complete_changed_is_refused(self):
+        self.assert_resume_refused([], ["--no-auto-complete"], "auto_complete")
+
+    def test_resuming_with_an_edited_setup_is_refused(self):
+        def setups_file(k):
+            path = Path(self.tmp.name) / f"setups_{k}.json"
+            path.write_text(
+                json.dumps({"setups": [{"name": "h", "policy": "hybrid", "k": k}]}),
+                encoding="utf-8",
+            )
+            return path
+
+        self.assert_resume_refused(
+            [], [], "setups",
+            first_setups=setups_file(3),
+            second_setups=setups_file(1),
+        )
+
+    def test_first_settings_are_kept_when_resume_is_refused(self):
+        self.assert_resume_refused(["--k", "3"], ["--k", "1"], "flags")
+
+        config = json.loads((self.batch_dir / "batch_config.json").read_text())
+        self.assertEqual(config["flags"], ["--provider", "ollama", "--k", "3"])
+
+    def test_batch_from_before_the_settings_check_can_resume(self):
+        self.run_batch(FakeChild(crash_tasks={"user_task_2"}))
+        path = self.batch_dir / "batch_config.json"
+        config = json.loads(path.read_text())
+        del config["flags"], config["setups"]
+        path.write_text(json.dumps(config))
+
+        retry = FakeChild()
+        self.run_batch(retry, "--k", "1")
+
+        self.assertEqual(len(retry.commands), 2)
+
+    def test_retry_replaces_the_old_error_line(self):
+        self.run_batch(FakeChild(crash_tasks={"user_task_2"}))
+        output = self.run_batch(FakeChild())
+
+        lines = self.summary_lines()
+        self.assertEqual(len(lines), 4)
+        self.assertFalse(any("error" in line for line in lines))
+        self.assertNotIn("failed", output)
 
     def test_dry_run_starts_no_process(self):
         child = FakeChild()

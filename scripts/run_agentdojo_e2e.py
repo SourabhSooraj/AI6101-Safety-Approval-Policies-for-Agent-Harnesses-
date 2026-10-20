@@ -43,7 +43,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--log-dir",
         type=Path,
-        help="Folder for this run's logs (default: logs/agentdojo_e2e/<run id>).",
+        help=(
+            "Folder for this run's logs (default: logs/agentdojo_e2e/<run id>). "
+            "Decision logs in an existing folder are appended to, not replaced; "
+            "use an empty folder."
+        ),
     )
     parser.add_argument(
         "--run-id",

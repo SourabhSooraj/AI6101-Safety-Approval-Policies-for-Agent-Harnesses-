@@ -46,8 +46,9 @@ SETUP_KEYS = frozenset(
         "sample_count",
     }
 )
-# 续跑同一批时必须一致的设置：q table 和 TCR 都依赖这些模型。
+# 续跑同一批时必须一致的设置：q table 和 TCR 都依赖这些模型和 agent 的 system prompt。
 MODEL_CONFIG_KEYS = (
+    "auto_complete",
     "benchmark_version",
     "suite",
     "provider",
@@ -64,6 +65,8 @@ MODEL_CONFIG_KEYS = (
     "attack_model_name",
 )
 SETUP_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+# 值为文件路径的参数：子进程在 REPO_ROOT 下运行，先转成绝对路径。
+PATH_KEYS = frozenset({"q_table", "reviewer_error_table"})
 
 
 @dataclass(frozen=True)
@@ -160,6 +163,9 @@ def _flag_tokens(action: argparse.Action, value: Any) -> list[str]:
     option = action.option_strings[0]
     if isinstance(action, argparse._StoreTrueAction):
         return [option] if value else []
+    if action.dest in PATH_KEYS:
+        # 相对路径按运行命令的目录解析，而不是子进程的 REPO_ROOT。
+        value = Path(value).expanduser().resolve()
     return [option, str(value)]
 
 
@@ -249,8 +255,12 @@ def check_setups(model_flags: list[str], setups: list[Setup], *, resolve: bool) 
                 raise ValueError(f"setup {setup.name!r}: {error}") from error
 
 
-def check_same_models(path: Path, config_record: dict[str, Any]) -> None:
-    """续跑时模型设置必须与上次相同，否则一批日志会混用模型。"""
+def check_same_settings(path: Path, config_record: dict[str, Any]) -> None:
+    """
+    续跑时模型、传给每次运行的参数和 setup 都必须与上次相同，否则同一批的
+    文件夹会混用不同的模型或 gate 设置（例如一半 k=3、一半 k=1）。
+    旧的 batch_config.json 没有 flags / setups 字段时只检查模型。
+    """
 
     if not path.exists():
         return
@@ -260,9 +270,12 @@ def check_same_models(path: Path, config_record: dict[str, Any]) -> None:
         for key in MODEL_CONFIG_KEYS
         if previous.get(key) != config_record.get(key)
     ]
+    for key in ("flags", "setups"):
+        if key in previous and previous[key] != config_record[key]:
+            changed.append(f"{key}: {previous[key]!r} -> {config_record[key]!r}")
     if changed:
         raise ValueError(
-            f"{path.parent.name} was started with other model settings; "
+            f"{path.parent.name} was started with other settings; "
             "use a new --batch-id. Changed: " + "; ".join(changed)
         )
 
@@ -392,13 +405,18 @@ def main(argv: list[str] | None = None) -> None:
     config = config_from_args(args)
     print_config_warnings(config)
     config_record = {
-        key: value
-        for key, value in asdict(config).items()
-        if not key.endswith("api_key")
+        **{
+            key: value
+            for key, value in asdict(config).items()
+            if not key.endswith("api_key")
+        },
+        # 每次运行实际收到的参数；续跑时必须相同。
+        "flags": model_flags,
+        "setups": [asdict(setup) for setup in setups],
     }
     config_path = batch_dir / "batch_config.json"
     try:
-        check_same_models(config_path, config_record)
+        check_same_settings(config_path, config_record)
     except ValueError as error:
         parser.error(str(error))
 
@@ -410,7 +428,6 @@ def main(argv: list[str] | None = None) -> None:
                 "split": args.split,
                 "split_file": str(args.split_file) if args.split else None,
                 "task_ids": task_ids,
-                "setups": [asdict(setup) for setup in setups],
                 "policies": sorted({setup.policy for setup in setups}),
                 "injection_tasks": args.injection_tasks,
             },
@@ -451,8 +468,7 @@ def main(argv: list[str] | None = None) -> None:
                 f"attack_succeeded={summary['attack_succeeded']} "
                 f"cost=${summary['total_cost_usd']:.4f}"
             )
-        with summary_path.open("a", encoding="utf-8") as file:
-            file.write(json.dumps(summary, default=str) + "\n")
+        write_summary_line(summary_path, summary)
 
     print_batch_table(summary_path)
     print(f"batch_dir={batch_dir}")
@@ -515,22 +531,53 @@ def episode_cost(summary: dict) -> float:
     return total
 
 
+def summary_key(record: dict[str, Any]) -> tuple[str, str, str | None]:
+    """batch_summary.jsonl 中一个 episode 的标识；旧记录没有 setup 时用 policy。"""
+
+    return (
+        record["task_id"],
+        record.get("setup", record["policy"]),
+        record["injection_task_id"],
+    )
+
+
+def read_summary_lines(summary_path: Path) -> list[dict[str, Any]]:
+    """每个 episode 只保留最后一行：重跑成功后，旧的错误记录不再计入。"""
+
+    latest: dict[tuple[str, str, str | None], dict[str, Any]] = {}
+    with summary_path.open("r", encoding="utf-8") as file:
+        for line in file:
+            if line.strip():
+                record = json.loads(line)
+                latest.pop(summary_key(record), None)
+                latest[summary_key(record)] = record
+    return list(latest.values())
+
+
+def write_summary_line(summary_path: Path, record: dict[str, Any]) -> None:
+    """写入一个 episode 的结果，并删除同一 episode 之前的记录。"""
+
+    records = read_summary_lines(summary_path) if summary_path.exists() else []
+    records = [old for old in records if summary_key(old) != summary_key(record)]
+    records.append(record)
+    summary_path.write_text(
+        "".join(json.dumps(item, default=str) + "\n" for item in records),
+        encoding="utf-8",
+    )
+
+
 def print_batch_table(summary_path: Path) -> None:
     """按 setup（旧记录没有 setup 时用 policy）和是否有攻击汇总 utility、攻击成功率和成本。"""
 
     rows: dict[tuple[str, bool], list[dict]] = {}
     errors = 0
-    with summary_path.open("r", encoding="utf-8") as file:
-        for line in file:
-            if not line.strip():
-                continue
-            record = json.loads(line)
-            if "error" in record:
-                errors += 1
-                continue
-            setup = record.get("setup", record["policy"])
-            key = (setup, record["injection_task_id"] is not None)
-            rows.setdefault(key, []).append(record)
+    for record in read_summary_lines(summary_path):
+        if "error" in record:
+            errors += 1
+            continue
+        setup = record.get("setup", record["policy"])
+        key = (setup, record["injection_task_id"] is not None)
+        rows.setdefault(key, []).append(record)
 
     print()
     print(
