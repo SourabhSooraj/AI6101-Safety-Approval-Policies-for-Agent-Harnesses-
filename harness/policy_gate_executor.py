@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
 from agentdojo.agent_pipeline.tool_execution import ToolsExecutor
@@ -19,6 +20,18 @@ from .policy import (
 )
 from .policy_engine import PolicyEngine
 from .simulated_reviewer import ReviewResult, SimulatedReviewer
+
+
+@dataclass(frozen=True)
+class GateCall:
+    """一次经过 gate 的工具调用：最终决策，以及工具是否真的执行成功。"""
+
+    tool_call_id: str
+    tool_name: str
+    arguments: dict[str, Any] = field(default_factory=dict)
+    decision: Decision = Decision.DENY
+    # ALLOW 且工具没有报错（例如缺参数的 ValidationError）才算执行。
+    executed: bool = False
 
 
 class PolicyGateToolsExecutor(ToolsExecutor):
@@ -43,6 +56,8 @@ class PolicyGateToolsExecutor(ToolsExecutor):
         self.escalation_budget = escalation_budget
         self.reviewer = reviewer
         self.review_logger = review_logger
+        # 按顺序记录本 episode 的每次调用；AgentDojo 重试时环境不重置，记录也不清空。
+        self.calls: list[GateCall] = []
 
     @staticmethod
     def _history_from_messages(
@@ -153,6 +168,7 @@ class PolicyGateToolsExecutor(ToolsExecutor):
                         )
                     effective_decision = review_result.decision
 
+            executed = False
             if effective_decision == Decision.ALLOW:
                 # 只把当前获准的工具调用交给 AgentDojo 执行
                 assistant_message = dict(messages[-1])
@@ -166,6 +182,7 @@ class PolicyGateToolsExecutor(ToolsExecutor):
                     extra_args,
                 )
                 tool_results.append(processed_messages[-1])
+                executed = processed_messages[-1].get("error") is None
 
             else:
                 # DENY 和 REQUIRE_APPROVAL 都不执行；必须返回匹配的 tool_call_id。
@@ -196,6 +213,15 @@ class PolicyGateToolsExecutor(ToolsExecutor):
                         error=message,
                     )
                 )
+            self.calls.append(
+                GateCall(
+                    tool_call_id=tool_call.id,
+                    tool_name=tool_call.function,
+                    arguments=dict(tool_call.args),
+                    decision=effective_decision,
+                    executed=executed,
+                )
+            )
 
         return query, runtime, env, [*messages, *tool_results], extra_args
 

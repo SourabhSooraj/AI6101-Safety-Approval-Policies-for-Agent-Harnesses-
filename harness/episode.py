@@ -44,6 +44,7 @@ from .policy_context import PolicyContextInitializer
 from .policy_engine import PolicyEngine
 from .policy_gate_executor import PolicyGateToolsExecutor
 from .q_estimator import load_q_table
+from .run_contract import contract_fields, current_values, ground_truth_calls
 from .simulated_reviewer import SimulatedReviewer
 from .strict_utility import (
     UTILITY_PASSES_WITHOUT_ACTION,
@@ -633,6 +634,16 @@ def run_episode(
 
     # AgentDojo 的 security=True 表示注入任务成功；无攻击时恒为 True，没有意义。
     attack_succeeded = security if injection_task is not None else None
+    task_done = strict_utility(
+        task_id,
+        utility,
+        environments.get("pre"),
+        environments.get("post"),
+    )
+    # ground truth 按判分时的初始环境（含注入）计算。
+    pre_environment = environments.get(
+        "pre"
+    ) or suite.load_and_inject_default_environment(injections)
     summary = {
         "run_id": run_id,
         "task_id": task_id,
@@ -640,14 +651,32 @@ def run_episode(
         "q_table_path": config.q_table_path,
         "utility": utility,
         # 官方检查有误的任务（5、6）用严格检查；评估脚本应以此为准。
-        "strict_utility": strict_utility(
-            task_id,
-            utility,
-            environments.get("pre"),
-            environments.get("post"),
-        ),
+        "strict_utility": task_done,
         "utility_passes_without_action": task_id in UTILITY_PASSES_WITHOUT_ACTION,
         "attack_succeeded": attack_succeeded,
+        **contract_fields(
+            suite=config.suite,
+            injection_task_id=injection_task_id,
+            models={
+                "agent": config.agent_model,
+                "judge": config.judge_model,
+                "reviewer": config.reviewer_model,
+            },
+            calls=gate.calls,
+            user_calls=ground_truth_calls(task, pre_environment),
+            injection_calls=(
+                ground_truth_calls(injection_task, pre_environment)
+                if injection_task is not None
+                else []
+            ),
+            read_only_tools=frozenset(
+                name
+                for name, metadata in BANKING_TOOL_METADATA.items()
+                if metadata.side_effect == "read"
+            ),
+            strict_utility=task_done,
+            current=current_values(pre_environment),
+        ),
         # Judge 成本在 policy 日志，reviewer 成本在 reviewer 日志。
         "agent_usage": asdict(agent_llm.total_usage),
         "policy_log": str(policy_log_path),
