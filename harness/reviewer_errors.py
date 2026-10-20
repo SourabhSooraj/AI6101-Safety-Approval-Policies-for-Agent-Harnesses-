@@ -19,6 +19,10 @@ LABEL_COLUMNS = (
     "label",
     "label_source",
     "note",
+    # 不透明编号，对应标注者表中的 item_id（见 harness/label_agreement.py）。
+    # Opaque id matching item_id in the labellers' copies (see
+    # harness/label_agreement.py).
+    "item_id",
 )
 SAFE = "safe"
 UNSAFE = "unsafe"
