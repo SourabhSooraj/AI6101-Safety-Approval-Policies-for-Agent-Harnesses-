@@ -56,3 +56,62 @@ run's `policy_decisions.jsonl`, `reviewer_decisions.jsonl` and AgentDojo
 trace.
 
 Text still to write is marked `[TODO: ...]` in red in the PDF.
+
+## Still to do
+
+This list is for picking the report up in another session. Each item says
+where to work and what "done" looks like.
+
+### 1. Extend `scripts/evaluate.py` for the † tables
+
+The script comes from PR #14 (`feat/evaluation-script`). Build on that branch,
+or on `main` once #14 is merged. Add three outputs, with tests in
+`tests/test_evaluation.py`:
+
+- **HITL load as the brief defines it**: total escalations across
+  *successfully completed* tasks, per setup and `k`, as a new column in
+  `hitl.csv`. Decide whether "completed" means `safe_task_completion` or
+  `strict_utility`, and write the choice into the report.
+- **`failures.csv`**: per setup and `k`, count the over-conservative failures
+  (a safe call auto-denied, or the budget used up on safe calls so the task
+  wasn't completed), the over-permissive failures (an unsafe call
+  auto-approved without escalation) and other failed runs. Use
+  `unauthorized_calls` in `run_summary.json` together with
+  `policy_decisions.jsonl`, and document how each run is assigned a type.
+- **`escalation_by_tool.csv`**: per setup and tool, the number of calls,
+  escalations, the reviewer approve rate, and how many escalated calls were
+  unsafe.
+
+Then add these files to the table-to-CSV mapping above.
+
+### 2. Run the final experiments
+
+- Choose the `k` values (the brief asks for "a meaningful range") and set
+  them in the setups file. Table 1 has columns for k = 0, 1, 2, 3 and 5 as a
+  starting point.
+- Run the test split with the DeepSeek models, then `evaluate.py --out
+  results/test`. The command is in Appendix B of `main.tex`.
+
+### 3. Fill in the report
+
+- **Tables 1–6 and 11**: copy from the CSVs, using the mapping above.
+- **Tables 7 and 10**: copy from the new CSVs in item 1.
+- **Tables 8 and 9 (trajectories)**: pick one over-conservative and one
+  over-permissive run from the test batch and fill in each step from its
+  `policy_decisions.jsonl`, `reviewer_decisions.jsonl` and AgentDojo trace.
+- **Text**: every `[TODO: ...]` in red. They cover the title page and
+  abstract, introduction, gate integration, the three policy stages, the
+  reviewer model and the tests that check what the reviewer sees, models and
+  `k` values, the TCR discussion, failure assignment, escalation-value
+  discussion, limitations and conclusion.
+- **Reviewer tests**: the reviewer section refers to
+  `tests/test_safety_invariants.py`, which is in PR #13. Check it's merged
+  before submitting. The review of #13 suggested strengthening its E12 test
+  so that it would also catch tool outputs leaking to the reviewer.
+
+### 4. Build the PDF
+
+`main.tex` hasn't been compiled yet, because the machine it was written on
+has no TeX. Build it once (`latexmk -pdf main.tex`, or upload the `report/`
+folder to Overleaf), then fix any overfull tables. The HITL and cost tables
+have the most columns.
