@@ -598,7 +598,7 @@ python scripts/evaluate.py logs/agentdojo_batch/<batch_id> --out results/dev
 | Utility | Share of runs with `strict_utility`, with and without an attack (the official `utility` is in `results.json` too) |
 | TCR@k | Share of runs with `safe_task_completion`, for each setup at each `k`. Setups that differ only in `k` form one line of the curve; `no_budget` is shown as `unlimited` |
 | Attack success | `attack_succeeded` over attacked runs that finished, and over all attacked runs with a crash counted as "not succeeded"; the number of crashed attacked runs is reported next to it |
-| HITL load | Escalations per run, share of the budget used, calls auto-denied because the budget ran out, runs that ran out of budget, reviewer approve and failure rates |
+| HITL load | `escalations_completed`, the brief's definition: total escalations across successfully completed tasks (`safe_task_completion`). Also escalations over all runs, escalations per run, share of the budget used, calls auto-denied because the budget ran out, runs that ran out of budget, reviewer approve and failure rates |
 | Cost | Agent, Judge and reviewer cost in USD and tokens, total and per run |
 
 A run that crashed (no `run_summary.json`) never counts as a success: it is
@@ -618,9 +618,12 @@ Wilson band) as `tcr_at_k.png` and `tcr_at_k.pdf`. The PDF has no creation
 date, so the same data always gives the same file.
 
 Batches whose agent, Judge or reviewer models differ are refused unless you
-pass `--allow-mixed-models`. Mixing dev and test batches gives a warning. If
-the same setup and (task, attack) appear in several batches, the last folder
-given wins.
+pass `--allow-mixed-models`, even when a later batch would replace the earlier
+runs. Mixing dev and test batches gives a warning. A run is identified by its
+setup, task, injection task and attack method (`attack_mode`), so batches with
+different attack methods are kept apart, and McNemar only pairs runs with the
+same attack; the by-attack-type table has an `attack_mode` column. If the same
+run appears in several batches, the last folder given wins.
 
 ### Running several tasks in one process
 
@@ -1262,7 +1265,7 @@ python scripts/evaluate.py logs/agentdojo_batch/<batch_id> --out results/dev
 | Utility | `strict_utility` 为真的比例，分有无攻击（官方 `utility` 也在 `results.json` 中） |
 | TCR@k | `safe_task_completion` 为真的比例，按 setup 和 `k` 计算。只有 `k` 不同的 setup 组成曲线上的一条线；`no_budget` 显示为 `unlimited` |
 | 攻击成功率 | `attack_succeeded` 在完成的有攻击运行中的比例，以及在全部有攻击运行中的比例（崩溃算作攻击未成功），并同时报告崩溃的有攻击运行数 |
-| HITL 负担 | 每次运行的升级次数、预算使用比例、因预算用完被自动拒绝的调用、用完预算的运行，以及 reviewer 的批准率和失败率 |
+| HITL 负担 | `escalations_completed`，即题目的定义：所有成功完成（`safe_task_completion`）的任务中的升级总数。另有全部运行的升级总数、每次运行的升级次数、预算使用比例、因预算用完被自动拒绝的调用、用完预算的运行，以及 reviewer 的批准率和失败率 |
 | 成本 | agent、Judge、reviewer 的美元成本和 token，总计和每次运行平均 |
 
 崩溃的运行（没有 `run_summary.json`）永远不算成功：在 utility 和 TCR 的分母中
@@ -1279,9 +1282,11 @@ setup 之间做成对的精确 McNemar 检验，只用两个 setup **都**完成
 family 一条线，带 Wilson 区间）保存为 `tcr_at_k.png` 和 `tcr_at_k.pdf`。PDF 不写
 创建时间，同样的数据总是生成同样的文件。
 
-agent、Judge 或 reviewer 模型不同的 batch 默认拒绝合并，传入
-`--allow-mixed-models` 可强制合并。混用 dev 和 test batch 会给出警告。同一 setup
-和 (task, 攻击) 出现在多个 batch 中时，以最后给出的文件夹为准。
+agent、Judge 或 reviewer 模型不同的 batch 默认拒绝合并（即使后一个 batch 会替换
+之前的运行），传入 `--allow-mixed-models` 可强制合并。混用 dev 和 test batch 会给出
+警告。一次运行由 setup、task、注入任务和攻击方法（`attack_mode`）确定，所以不同攻击
+方法的 batch 不会互相替换，McNemar 也只配对同一种攻击；按攻击类型的表多了
+`attack_mode` 列。同一次运行出现在多个 batch 中时，以最后给出的文件夹为准。
 
 ### 在同一进程中运行多个任务
 

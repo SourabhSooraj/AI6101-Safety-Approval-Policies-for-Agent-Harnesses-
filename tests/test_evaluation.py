@@ -41,6 +41,7 @@ class BatchBuilder:
             "t_low": 0.3,
             "t_high": 0.7,
             "split": split,
+            "attack": "important_instructions_deepseek",
         }
         self.write_config()
         self.lines: list[dict] = []
@@ -64,6 +65,7 @@ class BatchBuilder:
         reviews=(),
         agent_usd=0.0,
         models=None,
+        attack_mode="important_instructions_deepseek",
     ):
         policy = policy or setup
         folder = self.dir / f"{task_id}__{setup}__{injection or 'none'}"
@@ -75,6 +77,7 @@ class BatchBuilder:
             "policy": policy,
             "policy_variant": policy,
             "injection_task_id": injection,
+            "attack_mode": attack_mode if injection else "none",
             "k": UNLIMITED_ESCALATIONS if policy == "no_budget" else k,
             "allocator": "value",
             "tau0": 1.0,
@@ -387,6 +390,85 @@ class SyntheticBatchTests(unittest.TestCase):
         self.assertEqual(runs[0].batch, "b2")
         self.assertTrue(any("more than one split" in warning for warning in warnings))
         self.assertTrue(any("appears in b1 and b2" in warning for warning in warnings))
+
+    def test_models_are_checked_before_duplicates_are_removed(self):
+        # 后一个 batch 用不同模型覆盖同一 setup 和任务时，也必须报错。
+        # A later batch with other models covering the same setup and task
+        # must still be refused.
+        qwen = self.batch("qwen", models={**MODELS, "agent": "qwen3.7-flash"})
+        qwen.run("user_task_1", "hybrid")
+        deepseek = self.batch("deepseek", models={**MODELS, "agent": "deepseek-flash"})
+        deepseek.run("user_task_1", "hybrid")
+
+        with self.assertRaisesRegex(ValueError, "qwen3.7-flash"):
+            load_runs([qwen.dir, deepseek.dir])
+        runs, warnings = load_runs([qwen.dir, deepseek.dir], allow_mixed_models=True)
+        self.assertEqual(len(runs), 1)
+        self.assertTrue(any("appears in qwen and deepseek" in w for w in warnings))
+
+    def test_hitl_load_counts_only_completed_runs(self):
+        batch = self.batch()
+        two_reviews = [
+            {"decision": "REQUIRE_APPROVAL", "remaining_escalations_at_decision": 3},
+            {"decision": "REQUIRE_APPROVAL", "remaining_escalations_at_decision": 2},
+        ]
+        batch.run("user_task_1", "hybrid", safe=False, decisions=two_reviews)
+        batch.run("user_task_2", "hybrid", safe=True, decisions=two_reviews[:1])
+        batch.crash("user_task_3", "hybrid", decisions=two_reviews)
+
+        hitl = row(evaluate(load_runs([batch.dir])[0])["hitl"], setup="hybrid")
+
+        self.assertEqual(hitl["escalations_completed"], 1)
+        self.assertEqual(hitl["completed_runs"], 1)
+        # 所有运行上的计数保留在旁边。 / The all-runs count stays alongside.
+        self.assertEqual(hitl["escalations"], 5)
+
+    def test_attack_methods_are_kept_apart(self):
+        first = self.batch("b1")
+        first.run("user_task_1", "hybrid")
+        first.run("user_task_1", "hybrid", "injection_task_0", attack_succeeded=True)
+        second = self.batch("b2")
+        second.run("user_task_1", "hybrid", "injection_task_0",
+                   attack_succeeded=False, attack_mode="direct")
+
+        runs, warnings = load_runs([first.dir, second.dir])
+        results = evaluate(runs)
+
+        self.assertEqual(len(runs), 3)
+        self.assertEqual(warnings, [])
+        modes = sorted(
+            (item["attack_mode"], item["attack_type"]) for item in results["by_attack_type"]
+        )
+        self.assertEqual(
+            modes,
+            [("direct", "data_stealing"),
+             ("important_instructions_deepseek", "data_stealing"),
+             ("none", "none")],
+        )
+        # 无攻击的运行不会把 setup 分成两组。 / No-attack runs don't split the setup.
+        self.assertEqual(len(results["tcr_at_k"]), 1)
+
+    def test_mcnemar_never_pairs_different_attack_methods(self):
+        batch = self.batch()
+        for number in range(1, 5):
+            task = f"user_task_{number}"
+            batch.run(task, "hybrid", "injection_task_0", attack_succeeded=False)
+            batch.run(task, "allow_all", "injection_task_0", attack_succeeded=True,
+                      attack_mode="direct")
+
+        rows = evaluate(load_runs([batch.dir])[0])["mcnemar"]
+
+        self.assertEqual(rows, [])
+
+    def test_crashed_run_takes_its_attack_method_from_the_batch(self):
+        batch = self.batch()
+        batch.crash("user_task_1", "hybrid", "injection_task_0")
+        batch.crash("user_task_2", "hybrid")
+
+        runs = {run.task_id: run for run in load_runs([batch.dir])[0]}
+
+        self.assertEqual(runs["user_task_1"].attack_mode, "important_instructions_deepseek")
+        self.assertEqual(runs["user_task_2"].attack_mode, "none")
 
     def test_folder_without_summary_or_error_is_unfinished(self):
         batch = self.batch()

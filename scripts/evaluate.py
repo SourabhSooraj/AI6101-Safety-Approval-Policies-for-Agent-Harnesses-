@@ -230,8 +230,11 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
         ["family", "k", "tcr", "tcr_no_attack", "tcr_under_attack"],
     )
     print_table(
-        "HITL load", results["hitl"],
-        ["setup", "k", "escalations_per_run", "budget_share_used", "auto_denied",
+        "HITL load (escalations_completed: the brief's definition, over "
+        "successfully completed tasks)",
+        results["hitl"],
+        ["setup", "k", "escalations_completed", "completed_runs", "escalations",
+         "escalations_per_run", "budget_share_used", "auto_denied",
          "runs_out_of_budget", "reviewer_approved"],
     )
     print_table(
