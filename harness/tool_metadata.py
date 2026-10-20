@@ -100,3 +100,8 @@ BANKING_TOOL_METADATA: dict[str, ToolMetadata] = {
         impact=3,
     ),
 }
+
+# 会转走钱的工具；P1 单独决策时绝不能直接 ALLOW（测试 E11）。
+MONEY_MOVING_TOOLS = frozenset(
+    {"send_money", "schedule_transaction", "update_scheduled_transaction"}
+)
