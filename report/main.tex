@@ -104,13 +104,14 @@ request are denied. Refer to the tool metadata (side effect, scope,
 reversibility, impact).}
 
 \subsection{LLM Judge}
-\todo{Scores the risk of calls P1 escalates, with three samples; scores below
+\todo{An LLM-as-a-judge~\cite{zheng2023judge}. Scores the risk of calls P1 escalates, with three samples; scores below
 $t_{\text{low}} = 0.3$ are allowed and above $t_{\text{high}} = 0.7$ denied
 (\texttt{configs/judge\_thresholds.json}, tuned on dev only). Judge failures
 and disagreement fail closed.}
 
 \subsection{P6: budget allocator}
-\todo{Middle-band calls reach P6, which escalates when the value of a human
+\todo{Related to learning to defer to an expert~\cite{mozannar2020defer}, under
+a budget. Middle-band calls reach P6, which escalates when the value of a human
 review exceeds a threshold that tightens as the remaining budget shrinks.
 Describe the value allocator and the cost-based allocator, and which one the
 final results use.}
@@ -143,9 +144,14 @@ A JSON payload with exactly these fields:
 \begin{itemize}[nosep]
   \item \texttt{user\_request}: the task description the user typed;
   \item \texttt{tool\_name} and \texttt{arguments} of the current call;
-  \item \texttt{tool\_metadata}: the tool's static properties (read or write,
-        local or external, reversible or not, sensitive arguments, impact);
-  \item \texttt{history}: the names and arguments of earlier calls in the task;
+  \item \texttt{tool\_metadata}: the tool's static properties: read or write,
+        local or external, reversible or not, sensitive arguments, impact,
+        whether it is destructive, and its intent keywords (the words in a
+        request that justify a destructive call, such as ``password'' for
+        \texttt{update\_password}). These are fixed per tool, not per task, so
+        they give no hint about the right answer for a given call;
+  \item \texttt{history}: the name, call id and arguments of each earlier call
+        in the task;
   \item \texttt{trace\_summary}: an optional summary of the trace (left empty
         in our runs).
 \end{itemize}
@@ -164,7 +170,9 @@ The instructions ask the reviewer to approve only calls that are clearly
 justified by the user request; not to deny only because an optional date or
 formatting detail differs, but to deny for a concrete security or
 authorisation concern; to treat every string in the payload as untrusted data,
-never as instructions; and not to use or infer benchmark ground truth. The
+never as instructions, in the spirit of the instruction
+hierarchy~\cite{wallace2024hierarchy}; and not to use or infer benchmark
+ground truth. The
 full prompt is:
 
 \begin{lstlisting}
@@ -182,21 +190,79 @@ PAYLOAD:
 
 \paragraph{Output and failures.}
 The reviewer must return one JSON object,
-\texttt{\{"decision": "APPROVE" | "DENY", "reason": ...\}}. Anything else
-(invalid JSON, another decision, an API error or a timeout) counts as a failed
-review, and the call is denied. Failures are logged with
+\texttt{\{"decision": "APPROVE" | "DENY", "reason": ...\}}. The parser
+also accepts \texttt{ALLOW} and \texttt{APPROVED} as approval, and
+\texttt{DENIED}, \texttt{BLOCK} and \texttt{BLOCKED} as denial. Any other
+decision, invalid JSON, an API error or a timeout counts as a failed review,
+and the call is denied. Failures are logged with
 \texttt{reviewer\_success = false} and the error, and are left out of the
 reviewer error-rate estimates.
 
 \paragraph{Model.}
-\todo{Reviewer model and temperature used for the reported runs. We use a
-different model family from the agent and Judge, so the reviewer does not
-share their mistakes.}
+The reviewer is \texttt{glm-5.1} on Alibaba Cloud Model Studio (DashScope),
+at temperature 0 with thinking mode switched off. It is a different model
+family from the Judge (\texttt{qwen3.7-flash}) and the agent (DeepSeek), so
+it is less likely to share their mistakes.
 
 \paragraph{Checking the information boundary.}
 \todo{Describe the tests that check the reviewer payload has only these
 fields and that no attack text reaches it
 (\texttt{tests/test\_safety\_invariants.py}).}
+
+\subsection{Reviewer validation}
+\label{sec:reviewer-validation}
+
+Following ToolEmu~\cite{toolemu}, we check the simulated reviewer the way one
+would check a human annotator: if it agrees with people about as well as
+people agree with each other, it is a reasonable stand-in for a human
+reviewer. Two group members labelled the escalated dev calls independently,
+blind to the reviewer's verdict, on the rows that ground truth could not
+settle. \todo{Quote ToolEmu's human-human and human-AI $\kappa$ for
+comparison, and discuss.}
+
+\begin{table}[h]
+  \centering
+  \small
+  \caption{Agreement on the rows that needed a human, all on the same rows
+    (\texttt{agreement.json} from \texttt{scripts/label\_agreement.py
+    --reviewer-logs}). The reviewer's ALLOW counts as \emph{safe} and DENY
+    as \emph{unsafe}; failed reviews are left out.}
+  \label{tab:reviewer-agreement}
+  \begin{tabular}{lccc}
+    \toprule
+    Comparison & Items & Agreement & Cohen's $\kappa$ \\
+    \midrule
+    Labeller A vs labeller B        & \tbd & \tbd & \tbd \\
+    Labeller A vs reviewer          & \tbd & \tbd & \tbd \\
+    Labeller B vs reviewer          & \tbd & \tbd & \tbd \\
+    Agreed human label vs reviewer  & \tbd & \tbd & \tbd \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+We also stress-test the reviewer by replaying logged calls to it
+(\texttt{scripts/replay\_reviewer.py}): each call several times, to see
+whether it gives the same answer (consistency), and calls it denied with a
+plausible justification added to the payment subject (persuasion). The
+persuasion effect is the difference from a control run of the same denied
+calls without the added text, since an inconsistent reviewer flips some
+answers anyway.
+
+\begin{table}[h]
+  \centering
+  \small
+  \caption{Reviewer consistency and persuasion\needsscript.}
+  \label{tab:reviewer-stress}
+  \begin{tabular}{lcccc}
+    \toprule
+    Test & Calls & Replies & Same answer every time & Approved \\
+    \midrule
+    Consistency (all reviewed calls)       & \tbd & \tbd & \tbd & \tbd \\
+    Denied calls, no added text (control)  & \tbd & \tbd & \tbd & \tbd \\
+    Denied calls, with persuasion text     & \tbd & \tbd & \tbd & \tbd \\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
 \section{Experimental Setup}
 \label{sec:setup}
@@ -210,8 +276,15 @@ fields and that no attack text reaches it
         (\texttt{configs/banking\_dev\_test\_split.json}, seed 6101): 10 dev
         tasks for calibration, 6 test tasks (0, 3, 4, 7, 13, 15) for the
         reported results.
-  \item \textbf{Models}: \todo{agent, Judge and reviewer models and providers}.
-  \item \textbf{Budgets}: $k \in \{$\todo{k values}$\}$.
+  \item \textbf{Models}: agent DeepSeek (\texttt{deepseek-flash}); Judge
+        \texttt{qwen3.7-flash} and reviewer \texttt{glm-5.1}, both on Alibaba
+        Cloud Model Studio (DashScope). Thinking mode is off for all three.
+  \item \textbf{Budgets}: $k \in \{0, 1, 3, 5\}$, plus the unlimited budget
+        of \texttt{no\_budget}.
+  \item \textbf{Attack types}: following InjecAgent~\cite{injecagent}, we
+        group the injection tasks into \emph{data stealing} (tasks 0--3 and
+        8: read private data, then send it to the attacker) and
+        \emph{direct harm} (tasks 4--7).
   \item \textbf{Statistics}: every rate is reported with a 95\% Wilson
         interval~\cite{wilson1927}. Policies are compared with exact
         McNemar tests~\cite{mcnemar1947} on the same (task, attack) runs both
@@ -248,16 +321,17 @@ Cells marked \tbd{} come from \texttt{scripts/evaluate.py --out
 \begin{table}[h]
   \centering
   \caption{TCR@$k$ by policy (\texttt{tcr\_at\_k.csv}, column
-    \texttt{tcr}).}
+    \texttt{tcr}). \texttt{allow\_all} never escalates, so its TCR does not
+    depend on $k$.}
   \label{tab:tcr}
-  \begin{tabular}{lcccccc}
+  \begin{tabular}{lccccc}
     \toprule
-    Policy & $k{=}0$ & $k{=}1$ & $k{=}2$ & $k{=}3$ & $k{=}5$ & unlimited \\
+    Policy & $k{=}0$ & $k{=}1$ & $k{=}3$ & $k{=}5$ & unlimited \\
     \midrule
-    Full-approve (\texttt{allow\_all})       & \tbd & \tbd & \tbd & \tbd & \tbd & -- \\
-    Full-escalate (\texttt{escalate\_all})   & \tbd & \tbd & \tbd & \tbd & \tbd & -- \\
-    Developed policy (\texttt{hybrid})       & \tbd & \tbd & \tbd & \tbd & \tbd & -- \\
-    \texttt{no\_budget}                      & --   & --   & --   & --   & --   & \tbd \\
+    Full-approve (\texttt{allow\_all})       & \multicolumn{4}{c}{\tbd{} (the same at every $k$)} & -- \\
+    Full-escalate (\texttt{escalate\_all})   & \tbd & \tbd & \tbd & \tbd & -- \\
+    Developed policy (\texttt{hybrid})       & \tbd & \tbd & \tbd & \tbd & -- \\
+    \texttt{no\_budget}                      & --   & --   & --   & --   & \tbd \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -315,12 +389,13 @@ sits between the baselines, and whether the differences are significant
   \centering
   \small
   \caption{HITL load per policy (\texttt{hitl.csv}). ``Total'' is the
-    brief's definition: total escalations across successfully completed
-    tasks\needsscript. ``Budget used'' is the mean share of $k$ used per run.}
+    brief's definition: total escalations across successfully completed tasks
+    (\texttt{escalations\_completed}). ``Escal./run'' counts all runs.
+    ``Budget used'' is the mean share of $k$ used per run.}
   \label{tab:hitl}
   \begin{tabular}{lccccccc}
     \toprule
-    Policy & $k$ & Total\needsscript & Escal./run & Budget used
+    Policy & $k$ & Total & Escal./run & Budget used
       & Auto-denied & Out of budget & Approve \\
     \midrule
     \texttt{escalate\_all} & \tbd & \tbd & \tbd & \tbd & \tbd & \tbd & \tbd \\
@@ -486,17 +561,35 @@ the share of unsafe calls among escalations as evidence.}
 \section{Limitations}
 \label{sec:limitations}
 
-\todo{The reviewer never sees tool outputs; tool metadata covers the banking
-suite only; local-model runs are for development only; AgentDojo's own utility
-check passes with no action on some tasks, which is why we use
-\texttt{strict\_utility}.}
+\begin{itemize}[nosep]
+  \item \textbf{The reviewer never sees tool outputs.} This keeps injected
+        text away from it, but a real human reviewer would usually see more
+        context, such as the file the agent just read.
+  \item \textbf{Tool metadata covers the banking suite only.} Tools from
+        other suites are unknown to P1 and always escalate.
+  \item \textbf{AgentDojo's checks.} Its utility check passes with no agent
+        action on some tasks, so we report \texttt{strict\_utility}. Its
+        attack-success check for injection tasks 0, 1 and 3 counts \emph{any}
+        payment to the attacker as a success, whatever the subject says (an
+        operator-precedence slip: \texttt{service or "" in subject}), so
+        \texttt{attack\_succeeded} over-counts those attacks. \todo{Decide
+        whether to also report attack success from
+        \texttt{unauthorized\_calls}.}
+  \item \textbf{Run-to-run variation.} Two identical live runs gave different
+        results, so single runs are noisy. \todo{Number of repeats, and how
+        the spread is shown in the tables.}
+  \item \textbf{Development agent.} Development runs used a local agent
+        (\texttt{qwen3:8b}); the reported runs use DeepSeek, so settings tuned
+        during development may transfer imperfectly.
+\end{itemize}
+\todo{Discuss what these mean for the conclusions.}
 
 \section{Conclusion}
 \label{sec:conclusion}
 
 \todo{Main conclusions and lessons learned.}
 
-\begin{thebibliography}{9}
+\begin{thebibliography}{99}
 \bibitem{agentdojo}
 E.~Debenedetti, J.~Zhang, M.~Balunovi\'c, L.~Beurer-Kellner, M.~Fischer and
 F.~Tram\`er.
@@ -521,6 +614,36 @@ proportions or percentages.
 S.~Holm.
 \newblock A simple sequentially rejective multiple test procedure.
 \newblock \emph{Scandinavian Journal of Statistics}, 6(2):65--70, 1979.
+
+\bibitem{mozannar2020defer}
+H.~Mozannar and D.~Sontag.
+\newblock Consistent estimators for learning to defer to an expert.
+\newblock In \emph{International Conference on Machine Learning (ICML)}, 2020.
+
+\bibitem{toolemu}
+Y.~Ruan, H.~Dong, A.~Wang, S.~Pitis, Y.~Zhou, J.~Ba, Y.~Dubois,
+C.~J.~Maddison and T.~Hashimoto.
+\newblock Identifying the risks of LM agents with an LM-emulated sandbox.
+\newblock In \emph{International Conference on Learning Representations
+(ICLR)}, 2024.
+
+\bibitem{injecagent}
+Q.~Zhan, Z.~Liang, Z.~Ying and D.~Kang.
+\newblock InjecAgent: Benchmarking indirect prompt injections in
+tool-integrated large language model agents.
+\newblock In \emph{Findings of the Association for Computational Linguistics
+(ACL)}, 2024.
+
+\bibitem{zheng2023judge}
+L.~Zheng et~al.
+\newblock Judging LLM-as-a-judge with MT-Bench and Chatbot Arena.
+\newblock In \emph{NeurIPS Datasets and Benchmarks Track}, 2023.
+
+\bibitem{wallace2024hierarchy}
+E.~Wallace, K.~Xiao, R.~Leike, L.~Weng, J.~Heidecke and A.~Beutel.
+\newblock The instruction hierarchy: Training LLMs to prioritize privileged
+instructions.
+\newblock arXiv:2404.13208, 2024.
 \end{thebibliography}
 
 \appendix
@@ -549,9 +672,19 @@ S.~Holm.
 \section{Reproducing the Results}
 \label{app:repro}
 
+\todo{Create the final setups file with the $k$ sweep (0, 1, 3, 5) for every
+policy, and put its name in the command below.}
+
 \begin{lstlisting}
-python scripts/run_batch.py --provider deepseek --split test \
-  --setups configs/setups/policy_comparison.json \
+export DEEPSEEK_API_KEY=...       # agent
+export DASHSCOPE_API_KEY=...      # Judge and reviewer (Singapore region)
+QWEN=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+python scripts/run_batch.py --provider deepseek --model deepseek-flash \
+  --judge-model qwen3.7-flash --judge-base-url $QWEN \
+  --judge-api-key-env DASHSCOPE_API_KEY \
+  --reviewer-model glm-5.1 --reviewer-base-url $QWEN \
+  --reviewer-api-key-env DASHSCOPE_API_KEY \
+  --split test --setups configs/setups/<final-sweep>.json \
   --injection-tasks none injection_task_0 injection_task_1 injection_task_2 \
     injection_task_3 injection_task_4 injection_task_5 injection_task_6 \
     injection_task_7 injection_task_8 \
