@@ -90,11 +90,32 @@ Never commit the API key, `.env`, or any secret to GitHub.
 
 ### Run tests
 
-Unit tests use fake Judge clients and do not require a DeepSeek API key:
+Unit tests use fake Judge clients and do not require a DeepSeek API key. The
+property tests (`tests/test_properties.py`) also need Hypothesis, so install
+the development requirements first; without Hypothesis that file is skipped
+with a message, and the other tests still run:
 
 ```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
+
+GitHub Actions runs the same tests on Linux and Windows for every pull request
+and every push to `main`. There the property tests use a fixed seed
+(`derandomize`), so a failure shows up again when the job is rerun; locally
+they pick new random cases each time.
+
+**Windows: long paths.** Some files under `tests/fixtures/sample_runs/`, and
+the trace folders that real runs write, go past Windows' 260-character path
+limit. Before cloning, run:
+
+```powershell
+git config --global core.longpaths true
+```
+
+For real runs on Windows, also turn on Windows' own long-path setting
+("Enable Win32 long paths" in Group Policy, or `LongPathsEnabled` in the
+registry; this needs an administrator), or run batches on Colab or Linux.
 
 ### Local development with Ollama (free)
 
@@ -915,11 +936,29 @@ export DEEPSEEK_API_KEY="你的 DeepSeek API Key"
 
 ### 运行测试
 
-单元测试使用 fake Judge，不需要 DeepSeek API Key：
+单元测试使用 fake Judge，不需要 DeepSeek API Key。性质测试
+（`tests/test_properties.py`）还需要 Hypothesis，所以先安装开发依赖；没有
+Hypothesis 时这个文件会跳过并给出提示，其他测试照常运行：
 
 ```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
+
+GitHub Actions 在每个 pull request 和每次 push 到 `main` 时，在 Linux 和
+Windows 上运行同样的测试。在那里性质测试使用固定的 seed（`derandomize`），
+重新运行 job 时失败会再次出现；在本地每次都会随机生成新的输入。
+
+**Windows：长路径。** `tests/fixtures/sample_runs/` 下的一些文件，以及真实运行
+写出的 trace 文件夹，会超过 Windows 260 个字符的路径限制。clone 之前先运行：
+
+```powershell
+git config --global core.longpaths true
+```
+
+在 Windows 上做真实运行时，还要打开 Windows 自己的长路径设置（组策略中的
+“启用 Win32 长路径”，或注册表中的 `LongPathsEnabled`，需要管理员权限），
+或者在 Colab 或 Linux 上运行 batch。
 
 ### 使用 Ollama 本地开发（免费）
 
