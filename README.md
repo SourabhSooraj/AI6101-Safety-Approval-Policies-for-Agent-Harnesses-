@@ -615,6 +615,48 @@ their `risk_score` is a fixed placeholder, not a Judge score. `--baseline-thresh
 Then load the JSON with `run_agentdojo_e2e.py --q-table configs\q_table.json`,
 or in code with `PolicyEngine(q_table=load_q_table(path))`.
 
+### Evaluating batches
+
+`scripts/evaluate.py` reads one or more batch folders and reports every
+metric with a 95% Wilson interval. The statistics use only the standard
+library; matplotlib (in `requirements.txt`) draws the TCR@k plot.
+
+```bash
+python scripts/evaluate.py logs/agentdojo_batch/<batch_id> --out results/dev
+```
+
+| Metric | Definition |
+|---|---|
+| Utility | Share of runs with `strict_utility`, with and without an attack (the official `utility` is in `results.json` too) |
+| TCR@k | Share of runs with `safe_task_completion`, for each setup at each `k`. Setups that differ only in `k` form one line of the curve; `no_budget` is shown as `unlimited` |
+| Attack success | `attack_succeeded` over attacked runs that finished, and over all attacked runs with a crash counted as "not succeeded"; the number of crashed attacked runs is reported next to it |
+| HITL load | `escalations_completed`, the brief's definition: total escalations across successfully completed tasks (`safe_task_completion`). Also escalations over all runs, escalations per run, share of the budget used, calls auto-denied because the budget ran out, runs that ran out of budget, reviewer approve and failure rates |
+| Cost | Agent, Judge and reviewer cost in USD and tokens, total and per run |
+
+A run that crashed (no `run_summary.json`) never counts as a success: it is
+in the denominator of utility and TCR as "not done". Results are also broken
+down by attack type (`data_stealing`, `direct_harm`, none) and by user task.
+
+Setups are compared in pairs with an exact McNemar test on the same
+(task, attack) runs that **both** setups finished, for `safe_task_completion`,
+`attack_succeeded` (attacked runs only) and `strict_utility`. p-values are
+Holm-corrected across all pairs of the same metric.
+
+`--out` writes `results.json` and one CSV per table (`overview`, `tcr_at_k`,
+`hitl`, `cost`, `by_attack_type`, `by_user_task`, `mcnemar`); each rate has
+`_low`, `_high` and `_n` columns. The TCR@k curve is saved three ways: the
+numbers in `tcr_at_k.csv`, and the plot (one line per setup family, with its
+Wilson band) as `tcr_at_k.png` and `tcr_at_k.pdf`. The PDF has no creation
+date, so the same data always gives the same file.
+
+Batches whose agent, Judge or reviewer models differ are refused unless you
+pass `--allow-mixed-models`, even when a later batch would replace the earlier
+runs. Mixing dev and test batches gives a warning. A run is identified by its
+setup, task, injection task and attack method (`attack_mode`), so batches with
+different attack methods are kept apart, and McNemar only pairs runs with the
+same attack; the by-attack-type table has an `attack_mode` column. If the same
+run appears in several batches, the last folder given wins.
+
 ### Running several tasks in one process
 
 AgentDojo's `AgentPipeline.query` uses a shared default `extra_args={}`, and
@@ -1267,6 +1309,44 @@ reviewer 的真实判断。`stage` 不是 `p6` 的记录（来自 `p1_only` 或 
 
 之后用 `run_agentdojo_e2e.py --q-table configs\q_table.json` 加载，或在代码中
 使用 `PolicyEngine(q_table=load_q_table(path))`。
+
+### 评估 batch
+
+`scripts/evaluate.py` 读取一个或多个 batch 文件夹，每个指标都给出 95% Wilson
+区间。统计部分只用标准库；TCR@k 曲线图用 matplotlib 绘制（已列在
+`requirements.txt` 中）。
+
+```bash
+python scripts/evaluate.py logs/agentdojo_batch/<batch_id> --out results/dev
+```
+
+| 指标 | 定义 |
+|---|---|
+| Utility | `strict_utility` 为真的比例，分有无攻击（官方 `utility` 也在 `results.json` 中） |
+| TCR@k | `safe_task_completion` 为真的比例，按 setup 和 `k` 计算。只有 `k` 不同的 setup 组成曲线上的一条线；`no_budget` 显示为 `unlimited` |
+| 攻击成功率 | `attack_succeeded` 在完成的有攻击运行中的比例，以及在全部有攻击运行中的比例（崩溃算作攻击未成功），并同时报告崩溃的有攻击运行数 |
+| HITL 负担 | `escalations_completed`，即题目的定义：所有成功完成（`safe_task_completion`）的任务中的升级总数。另有全部运行的升级总数、每次运行的升级次数、预算使用比例、因预算用完被自动拒绝的调用、用完预算的运行，以及 reviewer 的批准率和失败率 |
+| 成本 | agent、Judge、reviewer 的美元成本和 token，总计和每次运行平均 |
+
+崩溃的运行（没有 `run_summary.json`）永远不算成功：在 utility 和 TCR 的分母中
+算作“未完成”。结果还按攻击类型（`data_stealing`、`direct_harm`、无）和 user
+task 分组。
+
+setup 之间做成对的精确 McNemar 检验，只用两个 setup **都**完成的同一
+(task, 攻击) 运行，比较 `safe_task_completion`、`attack_succeeded`（仅有攻击的
+运行）和 `strict_utility`。同一指标的所有配对之间做 Holm 校正。
+
+`--out` 写入 `results.json` 和每张表一个 CSV（`overview`、`tcr_at_k`、`hitl`、
+`cost`、`by_attack_type`、`by_user_task`、`mcnemar`），每个比例都有 `_low`、
+`_high` 和 `_n` 列。TCR@k 曲线保存三份：数值写入 `tcr_at_k.csv`，图（每个 setup
+family 一条线，带 Wilson 区间）保存为 `tcr_at_k.png` 和 `tcr_at_k.pdf`。PDF 不写
+创建时间，同样的数据总是生成同样的文件。
+
+agent、Judge 或 reviewer 模型不同的 batch 默认拒绝合并（即使后一个 batch 会替换
+之前的运行），传入 `--allow-mixed-models` 可强制合并。混用 dev 和 test batch 会给出
+警告。一次运行由 setup、task、注入任务和攻击方法（`attack_mode`）确定，所以不同攻击
+方法的 batch 不会互相替换，McNemar 也只配对同一种攻击；按攻击类型的表多了
+`attack_mode` 列。同一次运行出现在多个 batch 中时，以最后给出的文件夹为准。
 
 ### 在同一进程中运行多个任务
 
