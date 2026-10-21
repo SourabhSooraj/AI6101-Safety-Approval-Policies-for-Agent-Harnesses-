@@ -46,16 +46,16 @@ Two tables in the reviewer section come from other scripts:
 | Report table | Source |
 |---|---|
 | Reviewer agreement (humans vs reviewer) | `agreement.json` from `scripts/label_agreement.py --reviewer-logs` on the dev labels: `pairs` (A vs B), `reviewer.labellers_vs_reviewer`, `reviewer.agreed_humans_vs_reviewer` |
-| Reviewer consistency and persuasion † | `scripts/replay_reviewer.py` (PR #18): a consistency run, plus the same denied calls with and without `--persuade` |
+| Reviewer consistency and persuasion † | `scripts/replay_reviewer.py`: a consistency run, plus `--only-verdict DENY --persuade "…" --control`, which sends the same denied calls with and without the persuasion text |
 
-Tables marked † need output that isn't available yet:
+Tables marked † need results that don't exist yet:
 
 - **Failure classification**: over-conservative and over-permissive failures
   per policy (`evaluate.py`).
 - **Escalation value**: escalations, reviewer approvals and unsafe calls per
   tool (`evaluate.py`).
-- **Reviewer consistency and persuasion**: `scripts/replay_reviewer.py`, once
-  PR #18 is merged, with a control run for the persuasion test.
+- **Reviewer consistency and persuasion**: the reviewer stress tests (a7),
+  run with `scripts/replay_reviewer.py` on the dev pilot's reviewer logs.
 
 The representative trajectories (one table per failure type) are filled by
 hand from a run's `policy_decisions.jsonl`, `reviewer_decisions.jsonl` and
