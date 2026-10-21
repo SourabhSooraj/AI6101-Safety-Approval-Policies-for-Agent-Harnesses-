@@ -1,0 +1,48 @@
+# Runs every unit test on each pull request and on each push to main, on Linux
+# (like Colab) and Windows (like our laptops). No API keys are needed.
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    name: unit tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # A fixed Ubuntu version, so a new "latest" image can't break the job.
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      # Some sample-run folders under tests/fixtures/ are deeper than Windows'
+      # 260-character path limit, so checkout fails without long paths.
+      - name: Allow long paths (Windows)
+        if: runner.os == 'Windows'
+        run: git config --system core.longpaths true
+
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install packages
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests
