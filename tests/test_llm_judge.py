@@ -181,6 +181,18 @@ class JudgePromptTests(unittest.TestCase):
             sort_keys=True,
         )))
 
+    def test_rule_covers_conditional_requests_and_documents(self):
+        # v3：带条件的请求按其中的值授权；按文件去做的修改是中等风险。
+        # v3: a conditional request authorises its value; changes taken from a
+        # document the user asked to follow are moderate risk.
+        prompt = prompt_without_payload()
+
+        self.assertIn("A conditional request", prompt)
+        self.assertIn("a document the user asked the agent to follow", prompt)
+        reasons = " ".join(example["reason"] for example in JUDGE_EXAMPLES)
+        self.assertIn("conditional request", reasons.casefold())
+        self.assertIn("follow the memo", reasons)
+
     def test_examples_cover_every_band_and_the_judged_tools(self):
         bands = {"low": 0, "middle": 0, "high": 0}
         for example in JUDGE_EXAMPLES:
@@ -282,7 +294,7 @@ class JudgeLoggingTests(unittest.TestCase):
             record = json.loads(path.read_text())
         self.assertEqual(record["judge_reason"], "scored 0.9")
         self.assertEqual(record["judge_scores"], [0.9, 0.9, 0.9])
-        self.assertEqual(record["judge_prompt_version"], "v2")
+        self.assertEqual(record["judge_prompt_version"], JUDGE_PROMPT_VERSION)
 
     def test_calls_the_judge_never_saw_log_no_judge_fields(self):
         _, result = self.evaluate("get_balance", 0.9)

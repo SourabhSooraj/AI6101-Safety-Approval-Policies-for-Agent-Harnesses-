@@ -12,13 +12,13 @@ README, "Batch runs and the dev/test split").
 
 In the dev pilot the Judge denied most calls outright (41 in `hybrid`, 38 of
 them safe by ground truth), so few calls reached the reviewer and the budget
-`k` hardly mattered. b7 tunes `t_high` with the v2 Judge prompt, in two stages:
+`k` hardly mattered. b7 tunes `t_high` with the current (v3) Judge prompt, in two stages:
 first `t_high` at `k` = 3, then a check of the best settings at other budgets.
 `k` itself is not tuned: the final runs (b8) report TCR across `k`.
 
-Run everything from a commit that has the v2 Judge prompt, on the **dev split
+Run everything from a commit that has the v3 Judge prompt, on the **dev split
 only**, with the agreed models. Check the logs say `"judge_prompt_version":
-"v2"`.
+"v3"`.
 
 ### Stage 1: `t_high` at `k` = 3
 
