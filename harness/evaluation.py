@@ -3,9 +3,20 @@
 HITL 负担、各组件成本，按攻击类型和 user task 分组，并给出 Wilson 区间和
 McNemar + Holm 的成对比较。只用标准库。
 
+Evaluation (task 3): reads run_batch.py batch folders and computes utility,
+TCR@k, attack success rate, HITL load and cost by component, broken down by
+attack type and user task, with Wilson intervals and pairwise McNemar + Holm
+comparisons. Standard library only.
+
 约定：崩溃（没有 run_summary.json）的运行永远不算成功。utility 和 TCR 的分母包括
 崩溃的运行；攻击成功率给两个版本：只算完成的运行，以及把崩溃算作攻击未成功的
 全部运行（同时报告崩溃数，避免一个 gate 靠崩溃“降低”攻击成功率）。
+
+Convention: a run that crashed (no run_summary.json) never counts as a
+success. Utility and TCR include crashed runs in the denominator. Attack
+success is given two ways: over finished runs only, and over all runs with a
+crash counted as "attack did not succeed" (the crash count is reported too, so
+a gate cannot "lower" attack success by crashing).
 """
 
 import json
@@ -23,6 +34,8 @@ Z_95 = 1.959963984540054
 NO_ATTACK = "none"
 P6_POLICIES = frozenset({"hybrid", "no_budget"})
 # 除 k 以外区分配置的设置；同一 family 的不同 k 组成 TCR@k 曲线上的一条线。
+# Settings that tell configurations apart, apart from k; the k values of one
+# family form one line of the TCR@k curve.
 FAMILY_KEYS = (
     "policy_variant",
     "allocator",
@@ -37,21 +50,26 @@ FAMILY_KEYS = (
     "auto_complete",
 )
 # run_batch.py 的 setup 键 -> run_summary.json 中对应的字段。
+# run_batch.py setup key -> the matching run_summary.json field.
 SETUP_TO_SUMMARY = {
     "q_table": "q_table_path",
     "reviewer_error_table": "reviewer_error_table_path",
 }
 # 成对比较的指标；attack_succeeded 只比较有攻击的运行。
+# Metrics compared in pairs; attack_succeeded compares attacked runs only.
 COMPARED_METRICS = ("safe_task_completion", "attack_succeeded", "strict_utility")
 
 
-# ---------------------------------------------------------------- 统计
+# ---------------------------------------------------------------- 统计 / Statistics
 
 
 def wilson_interval(
     successes: int, total: int, z: float = Z_95
 ) -> tuple[float, float] | None:
-    """二项比例的 Wilson 区间；total 为 0 时没有区间。"""
+    """
+    二项比例的 Wilson 区间；total 为 0 时没有区间。
+    Wilson interval for a binomial proportion; None when total is 0.
+    """
 
     if total == 0:
         return None
@@ -70,6 +88,10 @@ def mcnemar_exact(b: int, c: int) -> float:
     """
     精确 McNemar 检验（双侧）：只看结果不同的配对，b 和 c 在 H0 下服从
     Binomial(b + c, 0.5)。小样本时比卡方近似可靠。
+
+    Exact two-sided McNemar test: only discordant pairs count, and under H0
+    b and c follow Binomial(b + c, 0.5). More reliable than the chi-squared
+    approximation for small samples.
     """
 
     n = b + c
@@ -80,7 +102,10 @@ def mcnemar_exact(b: int, c: int) -> float:
 
 
 def holm(p_values: Sequence[float]) -> list[float]:
-    """Holm 校正后的 p 值，顺序与输入相同，且随原始 p 单调不减。"""
+    """
+    Holm 校正后的 p 值，顺序与输入相同，且随原始 p 单调不减。
+    Holm-adjusted p-values, in input order and non-decreasing in the raw p.
+    """
 
     m = len(p_values)
     order = sorted(range(m), key=lambda index: p_values[index])
@@ -113,13 +138,16 @@ class Rate:
 
 
 def rate(flags: Iterable[bool | None]) -> Rate:
-    """None（该运行没有这个字段）不计入分母。"""
+    """
+    None（该运行没有这个字段）不计入分母。
+    None (the run has no such field) is left out of the denominator.
+    """
 
     known = [flag for flag in flags if flag is not None]
     return Rate(sum(known), len(known))
 
 
-# ---------------------------------------------------------------- 读取运行
+# ---------------------------------------------------------------- 读取运行 / Loading runs
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -131,7 +159,10 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 @dataclass
 class Run:
-    """一个 episode；summary 为 None 表示没有完成（崩溃或被中断）。"""
+    """
+    一个 episode；summary 为 None 表示没有完成（崩溃或被中断）。
+    One episode; summary is None when it did not finish (crashed or interrupted).
+    """
 
     batch: str
     setup: str
@@ -178,7 +209,11 @@ class Run:
         )
 
     def flag(self, key: str) -> bool | None:
-        """完成的运行读 run_summary；没完成的运行算作 False；字段不存在为 None。"""
+        """
+        完成的运行读 run_summary；没完成的运行算作 False；字段不存在为 None。
+        Finished runs read run_summary; unfinished runs count as False; a
+        missing field is None.
+        """
 
         if self.summary is None:
             return False
@@ -212,7 +247,11 @@ def _summary_models(summary: dict[str, Any]) -> dict[str, Any]:
 def _crashed_config(
     batch_config: dict[str, Any], setup: str, policy: str
 ) -> dict[str, Any]:
-    """没有任何完成运行可参照时，用 batch_config.json 和 setup 设置推出配置。"""
+    """
+    没有任何完成运行可参照时，用 batch_config.json 和 setup 设置推出配置。
+    With no finished run to copy from, work out the configuration from
+    batch_config.json and the setup's settings.
+    """
 
     config = {key: batch_config.get(key) for key in FAMILY_KEYS}
     config["policy_variant"] = policy
@@ -228,7 +267,10 @@ def _crashed_config(
 
 
 def load_batch(batch_dir: Path) -> tuple[list[Run], list[str]]:
-    """读取一个 batch 文件夹中的全部 episode（完成的和没完成的）。"""
+    """
+    读取一个 batch 文件夹中的全部 episode（完成的和没完成的）。
+    Read every episode in one batch folder, finished or not.
+    """
 
     batch_dir = Path(batch_dir)
     warnings: list[str] = []
@@ -239,6 +281,8 @@ def load_batch(batch_dir: Path) -> tuple[list[Run], list[str]]:
         else {}
     )
     # batch_summary 中每个 episode 只取最后一行（重跑成功会覆盖旧的错误）。
+    # Use only the last batch_summary line per episode (a successful retry
+    # replaces the old error).
     errors: dict[tuple[str, str, str], str] = {}
     for record in _read_jsonl(batch_dir / "batch_summary.jsonl"):
         injection = record.get("injection_task_id") or NO_ATTACK
@@ -323,11 +367,17 @@ def load_runs(
     """
     读取多个 batch。同一配置下同一 (task, 攻击) 出现多次时保留后读到的那个。
     模型不一致时报错（除非 allow_mixed_models），dev/test 混用时给出警告。
+
+    Read several batches. If the same (task, attack) appears more than once
+    for one configuration, the one read last is kept. Different models are an
+    error (unless allow_mixed_models); mixing dev and test gives a warning.
     """
 
     runs: dict[tuple, Run] = {}
     warnings: list[str] = []
     # 在去重之前收集：被后一个 batch 替换掉的运行也说明混用了划分。
+    # Collect before removing duplicates: a run replaced by a later batch
+    # still shows that splits were mixed.
     splits: set[str] = set()
     for batch_dir in batch_dirs:
         batch_runs, batch_warnings = load_batch(Path(batch_dir))
@@ -360,11 +410,15 @@ def load_runs(
     return result, warnings
 
 
-# ---------------------------------------------------------------- 指标
+# ---------------------------------------------------------------- 指标 / Metrics
 
 
 def outcome_metrics(runs: Sequence[Run]) -> dict[str, Any]:
-    """utility、TCR 和攻击成功率；见模块说明中的分母约定。"""
+    """
+    utility、TCR 和攻击成功率；见模块说明中的分母约定。
+    Utility, TCR and attack success; see the module docstring for the
+    denominator convention.
+    """
 
     clean = [run for run in runs if not run.attacked]
     attacked = [run for run in runs if run.attacked]
@@ -387,12 +441,17 @@ def outcome_metrics(runs: Sequence[Run]) -> dict[str, Any]:
 
 
 def _escalations(run: Run) -> tuple[int, int]:
-    """(交给 reviewer 的次数, 因预算用完被自动拒绝的次数)。"""
+    """
+    (交给 reviewer 的次数, 因预算用完被自动拒绝的次数)。
+    (calls sent to the reviewer, calls auto-denied because the budget ran out).
+    """
 
     escalated = auto_denied = 0
     for record in run.policy_records:
         if record.get("decision") == "REQUIRE_APPROVAL":
             # gate 在剩余预算为 0 时把 REQUIRE_APPROVAL 改成 DENY，日志里仍是原决定。
+            # With no budget left, the gate turns REQUIRE_APPROVAL into DENY,
+            # but the log keeps the original decision.
             if int(record.get("remaining_escalations_at_decision") or 0) > 0:
                 escalated += 1
             else:
@@ -437,6 +496,10 @@ def cost_metrics(runs: Sequence[Run]) -> dict[str, Any]:
     """
     各组件的美元成本和 token。agent 成本只在 run_summary 中，没完成的运行没有；
     Judge 和 reviewer 成本来自日志，没完成的运行也会计入已经花掉的部分。
+
+    Cost in USD and tokens for each component. Agent cost is only in
+    run_summary, so unfinished runs have none; Judge and reviewer cost come
+    from the logs, so what unfinished runs already spent is counted.
     """
 
     def total(records: Iterable[dict[str, Any]], *keys: str) -> float:
@@ -485,7 +548,7 @@ def cost_metrics(runs: Sequence[Run]) -> dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------- 分组与比较
+# ---------------------------------------------------------------- 分组与比较 / Grouping and comparison
 
 
 def _group(runs: Iterable[Run], key: Callable[[Run], Any]) -> dict[Any, list[Run]]:
@@ -496,7 +559,11 @@ def _group(runs: Iterable[Run], key: Callable[[Run], Any]) -> dict[Any, list[Run
 
 
 def config_labels(runs: Sequence[Run]) -> dict[tuple, str]:
-    """每个配置的显示名：setup 名；同名的配置再加上 k。"""
+    """
+    每个配置的显示名：setup 名；同名的配置再加上 k。
+    Display name of each configuration: the setup name, plus k when two
+    configurations share a name.
+    """
 
     names: dict[tuple, set[str]] = {}
     for run in runs:
@@ -553,6 +620,10 @@ def mcnemar_comparisons(runs: Sequence[Run]) -> list[dict[str, Any]]:
     """
     每对配置在双方都完成的同一 (task, 攻击) 上做精确 McNemar；
     Holm 校正在同一指标的所有配对之间进行。
+
+    Exact McNemar test for each pair of configurations, on the same
+    (task, attack) runs both finished; Holm correction is applied across all
+    pairs of the same metric.
     """
 
     labels = config_labels(runs)

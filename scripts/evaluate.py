@@ -5,6 +5,10 @@
 
 打印主要表格，并在 --out 中写入 results.json、每张表一个 CSV（含
 tcr_at_k.csv），以及 TCR@k 曲线图 tcr_at_k.png 和 tcr_at_k.pdf。
+
+Reads one or more run_batch.py batch folders and prints the main tables. With
+--out it writes results.json, one CSV per table (including tcr_at_k.csv), and
+the TCR@k plot as tcr_at_k.png and tcr_at_k.pdf.
 """
 
 import argparse
@@ -17,6 +21,7 @@ from typing import Any
 import matplotlib
 
 # 无界面后端：在服务器和 Colab 上也能保存图片。
+# Non-interactive backend, so plots can be saved on servers and Colab too.
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
@@ -48,7 +53,11 @@ def _json_value(value: Any) -> Any:
 
 
 def flatten(row: dict[str, Any]) -> dict[str, Any]:
-    """CSV 的一行：Rate 拆成 rate/low/high/n，嵌套的成本拆成 <组件>_<字段>。"""
+    """
+    CSV 的一行：Rate 拆成 rate/low/high/n，嵌套的成本拆成 <组件>_<字段>。
+    One CSV row: a Rate becomes rate/low/high/n columns, and nested cost becomes
+    <component>_<field> columns.
+    """
 
     flat: dict[str, Any] = {}
     for key, value in row.items():
@@ -81,13 +90,19 @@ PLOT_FORMATS = ("png", "pdf")
 
 
 def plot_tcr_at_k(rows: list[dict[str, Any]], out_dir: Path) -> list[Path]:
-    """画 TCR@k 曲线（含 95% Wilson 区间），保存为 PNG 和 PDF，返回写出的文件。"""
+    """
+    画 TCR@k 曲线（含 95% Wilson 区间），保存为 PNG 和 PDF，返回写出的文件。
+    Draw the TCR@k curve (with 95% Wilson bands), save it as PNG and PDF, and
+    return the files written.
+    """
 
     finite = sorted({int(row["k"]) for row in rows if row["k"] != "unlimited"})
     figure, axes = plt.subplots(figsize=(7, 4.5))
     families = dict.fromkeys(row["family"] for row in rows)
     for index, family in enumerate(families):
         # 每个 family 一个固定颜色；unlimited 的虚线与它的 family 同色。
+        # One fixed colour per family; an unlimited-budget dashed line uses
+        # its family's colour.
         color = f"C{index % 10}"
         points = [row for row in rows if row["family"] == family and row["tcr"].total]
         curve = [row for row in points if row["k"] != "unlimited"]
@@ -123,6 +138,8 @@ def plot_tcr_at_k(rows: list[dict[str, Any]], out_dir: Path) -> list[Path]:
     for extension in PLOT_FORMATS:
         path = out_dir / f"tcr_at_k.{extension}"
         # 不写创建时间，同样的数据生成同样的 PDF，方便放进报告的版本控制。
+        # No creation date, so the same data gives the same PDF, which keeps
+        # the report's version control clean.
         metadata = {"CreationDate": None} if extension == "pdf" else None
         figure.savefig(path, dpi=150, metadata=metadata)
         paths.append(path)
