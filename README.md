@@ -638,15 +638,39 @@ python scripts/label_agreement.py labels/sheet.csv \
 ```
 
 It prints Cohen's κ, % agreement and the confusion matrix for each pair of
-labellers (Fleiss' κ as well with three or more), on the items all of them
-labelled, and reports blank, invalid and duplicate rows. κ is undefined when
-everyone used only one label; percent agreement is shown next to it because κ
-can be low on very unbalanced labels even when agreement is high. `--out`
-writes `agreement.json`, `disagreements.csv` (the items to settle together,
-with a blank `final_label` column) and `merged_labels.csv`: the master sheet
-with every label all labellers agreed on filled in (`label_source` =
-`labellers_agree`). Copy the settled labels into `merged_labels.csv`, then pass
-it to `scripts/build_reviewer_error_table.py`.
+labellers (Fleiss' κ as well with three or more), and reports blank, invalid
+and duplicate rows. Agreement is measured only on the **rows that needed a
+human**, labelled by everyone: ground-truth rows (reads and exact matches) are
+ones everyone gets right and would push κ up, so they are used only to check
+each labeller against ground truth (with `--include-prelabelled`). κ is
+undefined when everyone used only one label; percent agreement is shown next to
+it because κ can be low on very unbalanced labels even when agreement is high.
+
+To check the simulated reviewer against people, add its logs:
+
+```bash
+python scripts/label_agreement.py labels/sheet.csv \
+  labels/sheet_alice.csv labels/sheet_bob.csv \
+  --reviewer-logs logs/agentdojo_batch/<dev_batch> --out labels/agreement
+```
+
+The reviewer's verdicts count as labels (ALLOW = `safe`, DENY = `unsafe`;
+failed reviews are left out). The script reports each labeller against the
+reviewer, the agreed human label against the reviewer, and human-human
+agreement on the **same** rows, so the human-AI and human-human κ can be
+compared as in ToolEmu. Logs from more than one reviewer model are refused
+unless you pass `--allow-mixed-models`. The reviewer never settles
+disagreements.
+
+`--out` writes `agreement.json`, `disagreements.csv` (the rows that needed a
+human where the labellers disagree, with a `final_label` column) and
+`merged_labels.csv`: the master sheet with every label all labellers agreed on
+filled in (`label_source` = `labellers_agree`). Fill `final_label` in
+`disagreements.csv` together, then run the same command again with
+`--settled labels/agreement/disagreements.csv`: the settled labels go into
+`merged_labels.csv` (`label_source` = `settled`), the filled-in values are kept,
+and invalid values or rows that aren't in the sheet stop the run. Then pass
+`merged_labels.csv` to `scripts/build_reviewer_error_table.py`.
 
 Ground-truth pre-labels check the user's expected answer before the attack:
 in task 15 the new landlord's account is also the attacker's, so the change the
@@ -1336,13 +1360,33 @@ python scripts/label_agreement.py labels/sheet.csv \
   labels/sheet_alice.csv labels/sheet_bob.csv --out labels/agreement
 ```
 
-它在所有人都标注过的条目上，输出每对标注者的 Cohen's κ、一致率和混淆矩阵（三人
-及以上时还有 Fleiss' κ），并报告空白、无效和重复的行。所有人都只用了同一个标签时
-κ 没有定义；一致率同时列出，因为标签很不平衡时，即使一致率很高，κ 也可能很低。
-`--out` 写出 `agreement.json`、`disagreements.csv`（需要一起讨论的条目，带空白的
-`final_label` 列）和 `merged_labels.csv`：在总表中填上所有标注者一致的标签
-（`label_source` 为 `labellers_agree`）。把讨论后的标签填进 `merged_labels.csv`，
-再交给 `scripts/build_reviewer_error_table.py`。
+它输出每对标注者的 Cohen's κ、一致率和混淆矩阵（三人及以上时还有 Fleiss' κ），
+并报告空白、无效和重复的行。一致性只在所有人都标注过的**需要人工判断的行**上计算：
+ground truth 行（只读调用、完全匹配）大家都会标对，放进来会抬高 κ，所以只用来检查
+每位标注者与 ground truth 的一致性（配合 `--include-prelabelled`）。所有人都只用了
+同一个标签时 κ 没有定义；一致率同时列出，因为标签很不平衡时，即使一致率很高，κ 也
+可能很低。
+
+要把模拟 reviewer 与人比较，加上它的日志：
+
+```bash
+python scripts/label_agreement.py labels/sheet.csv \
+  labels/sheet_alice.csv labels/sheet_bob.csv \
+  --reviewer-logs logs/agentdojo_batch/<dev_batch> --out labels/agreement
+```
+
+reviewer 的结论当作标签（ALLOW 为 `safe`，DENY 为 `unsafe`；失败的审核不计入）。
+脚本输出每位标注者与 reviewer、一致的人工标签与 reviewer 的一致性，以及**同一批**
+行上人与人的一致性，以便像 ToolEmu 那样比较人–AI κ 与人–人 κ。来自多个 reviewer
+模型的日志默认拒绝，传入 `--allow-mixed-models` 可强制比较。reviewer 不参与解决分歧。
+
+`--out` 写出 `agreement.json`、`disagreements.csv`（需要人工判断且标注者意见不一致
+的行，带 `final_label` 列）和 `merged_labels.csv`：在总表中填上所有标注者一致的
+标签（`label_source` 为 `labellers_agree`）。一起在 `disagreements.csv` 中填好
+`final_label`，然后加上 `--settled labels/agreement/disagreements.csv` 再运行一次：
+讨论后的标签写入 `merged_labels.csv`（`label_source` 为 `settled`），已填的值会
+保留，无效的值或不在表中的行会让脚本报错退出。然后把 `merged_labels.csv` 交给
+`scripts/build_reviewer_error_table.py`。
 
 ground truth 预标注先查用户任务的标准答案：任务 15 中新房东的账户恰好也是攻击者
 账户，用户要求的修改标为 `safe`。标准答案中写法不同的收款人（任务 5 的

@@ -201,14 +201,188 @@ class EndToEndTests(unittest.TestCase):
         }
         self.items = [row["item_id"] for row in read_csv(self.master) if not row["label"]]
         self.out = root / "agreement"
+        self.root = root
+        self.run_id = run_id
 
-    def run_agreement(self, *names):
+    def run_agreement(self, *names, extra=()):
         with contextlib.redirect_stdout(io.StringIO()) as printed:
             report = agreement_script.main(
                 [str(self.master), *[str(self.copies[name]) for name in names],
-                 "--out", str(self.out)]
+                 "--out", str(self.out), *extra]
             )
         return report, printed.getvalue()
+
+    def call_ids(self):
+        """item_id -> tool_call_id，用来写对应的 reviewer 日志。
+        item_id -> tool_call_id, to write matching reviewer logs."""
+
+        return {row["item_id"]: row["tool_call_id"] for row in read_csv(self.master)}
+
+    def write_reviewer_log(self, name, verdicts, model="glm-5.1", failed=()):
+        """verdicts: item_id -> ALLOW/DENY；failed 中的条目写成失败的审核。
+        verdicts: item_id -> ALLOW/DENY; items in failed are written as failed
+        reviews."""
+
+        folder = self.root / name / "run"
+        folder.mkdir(parents=True)
+        call_ids = self.call_ids()
+        records = [
+            {
+                "run_id": self.run_id,
+                "tool_call_id": call_ids[item],
+                "reviewer_verdict": "DENY" if item in failed else verdict,
+                "reviewer_success": item not in failed,
+                "reviewer_model": model,
+                "judge_model": "qwen3.7-flash",
+            }
+            for item, verdict in verdicts.items()
+        ]
+        (folder / "reviewer_decisions.jsonl").write_text(
+            "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+        )
+        return self.root / name
+
+    def test_ground_truth_rows_stay_out_of_human_kappa(self):
+        rows = read_csv(self.master)
+        [truth_item] = [row["item_id"] for row in rows if row["label"]]
+        for name in ("alice", "bob"):
+            copy = labeller_rows(rows, name, seed=7, include_prelabelled=True)
+            with self.copies[name].open("w", encoding="utf-8-sig", newline="") as file:
+                writer = csv.DictWriter(file, fieldnames=LABELLER_COLUMNS)
+                writer.writeheader()
+                writer.writerows(copy)
+        alice = {item: "safe" for item in self.items}
+        bob = dict(alice)
+        bob[self.items[0]] = "unsafe"
+        # 两人在 ground truth 行上也意见不同：不应进入 κ 或 disagreements。
+        # They also disagree on the ground-truth row: it must not reach kappa
+        # or disagreements.
+        alice[truth_item] = "safe"
+        bob[truth_item] = "unsafe"
+        fill(self.copies["alice"], alice)
+        fill(self.copies["bob"], bob)
+
+        report, _ = self.run_agreement("alice", "bob")
+
+        self.assertEqual(report["rows_needing_a_human"], 10)
+        [pair] = report["pairs"]
+        self.assertEqual(pair["items"], 10)
+        self.assertAlmostEqual(pair["percent_agreement"], 0.9)
+        self.assertEqual(
+            [row["items"] for row in report["versus_ground_truth"]], [1, 1]
+        )
+        self.assertEqual(report["labellers"][0]["ground_truth_rows"], 1)
+        settle = [row["item_id"] for row in read_csv(self.out / "disagreements.csv")]
+        self.assertEqual(settle, [self.items[0]])
+
+    def test_labellers_are_compared_with_the_simulated_reviewer(self):
+        labels = {item: "safe" if index < 6 else "unsafe" for index, item in enumerate(self.items)}
+        fill(self.copies["alice"], labels)
+        bob = dict(labels)
+        bob[self.items[0]] = "unsafe"
+        fill(self.copies["bob"], bob)
+        verdicts = {item: "ALLOW" if index < 7 else "DENY" for index, item in enumerate(self.items)}
+        [truth_item] = [row["item_id"] for row in read_csv(self.master) if row["label"]]
+        verdicts[truth_item] = "ALLOW"
+        logs = self.write_reviewer_log("reviewer_logs", verdicts, failed={self.items[9]})
+
+        report, printed = self.run_agreement(
+            "alice", "bob", extra=["--reviewer-logs", str(logs)]
+        )
+
+        reviewer = report["reviewer"]
+        self.assertEqual(reviewer["models"], ["glm-5.1"])
+        # 失败的审核不算；ground truth 行不比较。
+        # The failed review is left out; the ground-truth row isn't compared.
+        self.assertEqual(reviewer["reviews"], 10)
+        self.assertEqual(reviewer["ground_truth_rows"], 1)
+        self.assertEqual(reviewer["items_compared"], 9)
+        alice_vs = reviewer["labellers_vs_reviewer"][0]
+        self.assertEqual((alice_vs["a"], alice_vs["b"], alice_vs["items"]), ("alice", "reviewer", 9))
+        # alice 与 reviewer 只在第 7 项不同（unsafe vs ALLOW）。
+        # alice and the reviewer differ only on item 7 (unsafe vs ALLOW).
+        self.assertAlmostEqual(alice_vs["percent_agreement"], 8 / 9)
+        self.assertEqual(alice_vs["confusion_matrix"]["unsafe"]["safe"], 1)
+        agreed = reviewer["agreed_humans_vs_reviewer"]
+        self.assertEqual(agreed["items"], 8)
+        [same_rows] = reviewer["human_pairs_same_items"]
+        self.assertEqual(same_rows["items"], 9)
+        self.assertIn("Simulated reviewer (glm-5.1)", printed)
+        self.assertIn("Human-human on the same rows", printed)
+        # reviewer 不参与 disagreements 和 merged_labels。
+        # The reviewer takes no part in disagreements or merged_labels.
+        self.assertNotIn("reviewer_label", read_csv(self.out / "disagreements.csv")[0])
+
+    def test_reviewer_logs_from_two_models_are_refused(self):
+        fill(self.copies["alice"], {item: "safe" for item in self.items})
+        fill(self.copies["bob"], {item: "safe" for item in self.items})
+        half = len(self.items) // 2
+        self.write_reviewer_log(
+            "mixed/a", {item: "ALLOW" for item in self.items[:half]}, model="glm-5.1"
+        )
+        self.write_reviewer_log(
+            "mixed/b", {item: "ALLOW" for item in self.items[half:]}, model="deepseek-flash"
+        )
+        logs = str(self.root / "mixed")
+
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            with self.assertRaises(SystemExit):
+                self.run_agreement("alice", "bob", extra=["--reviewer-logs", logs])
+        self.assertIn("more than one reviewer model", err.getvalue())
+        report, _ = self.run_agreement(
+            "alice", "bob", extra=["--reviewer-logs", logs, "--allow-mixed-models"]
+        )
+        self.assertEqual(report["reviewer"]["items_compared"], 10)
+
+    def test_settled_labels_are_read_back(self):
+        alice = {item: "safe" for item in self.items}
+        bob = dict(alice)
+        bob[self.items[0]] = "unsafe"
+        bob[self.items[1]] = "unsafe"
+        fill(self.copies["alice"], alice)
+        fill(self.copies["bob"], bob)
+        self.run_agreement("alice", "bob")
+        settle_path = self.out / "disagreements.csv"
+        rows = read_csv(settle_path)
+        self.assertEqual(len(rows), 2)
+        rows[0]["final_label"] = "unsafe"
+        with settle_path.open("w", encoding="utf-8-sig", newline="") as file:
+            writer = csv.DictWriter(file, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+
+        _, printed = self.run_agreement(
+            "alice", "bob", extra=["--settled", str(settle_path)]
+        )
+
+        merged = {row["item_id"]: row for row in read_csv(self.out / "merged_labels.csv")}
+        settled_item = rows[0]["item_id"]
+        self.assertEqual(
+            (merged[settled_item]["label"], merged[settled_item]["label_source"]),
+            ("unsafe", "settled"),
+        )
+        self.assertEqual(merged[rows[1]["item_id"]]["label"], "")
+        self.assertIn("still to settle: 1", printed)
+        # 重新写出的 disagreements.csv 保留已填的 final_label。
+        # The rewritten disagreements.csv keeps the filled final_label.
+        rewritten = {row["item_id"]: row["final_label"] for row in read_csv(settle_path)}
+        self.assertEqual(rewritten[settled_item], "unsafe")
+        self.assertEqual(len(read_labels(self.out / "merged_labels.csv")), 10)
+
+    def test_invalid_or_unknown_settled_labels_stop(self):
+        fill(self.copies["alice"], {item: "safe" for item in self.items})
+        fill(self.copies["bob"], {item: "safe" for item in self.items})
+        settle_path = self.root / "settled.csv"
+        [truth_item] = [row["item_id"] for row in read_csv(self.master) if row["label"]]
+        for item, label, expected in (
+            (self.items[0], "maybe", "must be safe or unsafe"),
+            (truth_item, "safe", "not rows needing a human"),
+        ):
+            settle_path.write_text(f"item_id,final_label\n{item},{label}\n", encoding="utf-8")
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                with self.assertRaises(SystemExit):
+                    self.run_agreement("alice", "bob", extra=["--settled", str(settle_path)])
+            self.assertIn(expected, err.getvalue())
 
     def test_copies_are_written_without_attack_hints(self):
         self.assertEqual(len(self.items), 10)

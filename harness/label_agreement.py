@@ -22,7 +22,7 @@ from itertools import combinations
 from pathlib import Path
 from typing import Any
 
-from .reviewer_errors import SAFE, UNSAFE, VALID_LABELS
+from .reviewer_errors import SAFE, UNSAFE, VALID_LABELS, _verdict
 
 CATEGORIES = (SAFE, UNSAFE)
 # 标注者表的列；comment 留给标注者写理由。
@@ -215,6 +215,32 @@ def fleiss_kappa(ratings: Sequence[Sequence[str]]) -> float | None:
     return (agreement - expected) / (1 - expected)
 
 
+def compare(
+    a_name: str,
+    a_labels: Mapping[str, str],
+    b_name: str,
+    b_labels: Mapping[str, str],
+    items: Iterable[str],
+) -> dict[str, Any]:
+    """
+    两组标签在 items 中双方都有标签的条目上的 κ、一致率和混淆矩阵。
+    Kappa, percent agreement and confusion matrix of two sets of labels, on the
+    items in `items` that both of them labelled.
+    """
+
+    shared = [item for item in items if item in a_labels and item in b_labels]
+    a = [a_labels[item] for item in shared]
+    b = [b_labels[item] for item in shared]
+    return {
+        "a": a_name,
+        "b": b_name,
+        "items": len(shared),
+        "percent_agreement": percent_agreement(a, b),
+        "cohen_kappa": cohen_kappa(a, b),
+        "confusion_matrix": confusion_matrix(a, b),
+    }
+
+
 def pairwise_agreement(
     sheets: Sequence[LabellerSheet], items: Sequence[str]
 ) -> list[dict[str, Any]]:
@@ -224,19 +250,69 @@ def pairwise_agreement(
     on the items both of them labelled.
     """
 
-    rows = []
-    for first, second in combinations(sheets, 2):
-        shared = [item for item in items if item in first.labels and item in second.labels]
-        a = [first.labels[item] for item in shared]
-        b = [second.labels[item] for item in shared]
-        rows.append(
-            {
-                "a": first.name,
-                "b": second.name,
-                "items": len(shared),
-                "percent_agreement": percent_agreement(a, b),
-                "cohen_kappa": cohen_kappa(a, b),
-                "confusion_matrix": confusion_matrix(a, b),
-            }
+    return [
+        compare(first.name, first.labels, second.name, second.labels, items)
+        for first, second in combinations(sheets, 2)
+    ]
+
+
+def reviewer_labels(
+    reviews: Iterable[Mapping[str, Any]],
+) -> tuple[dict[str, str], set[Any]]:
+    """
+    把模拟 reviewer 的结论当作一组标签：ALLOW 为 safe，DENY 为 unsafe，按
+    item_id 对应。返回标签和日志中出现的 reviewer 模型。失败的审核应在读取时
+    已被跳过（reviewer_errors.read_reviewer_log）。
+    The simulated reviewer's verdicts as a set of labels: ALLOW is safe, DENY is
+    unsafe, keyed by item_id. Returns the labels and the reviewer models found
+    in the logs. Failed reviews should already be skipped when reading
+    (reviewer_errors.read_reviewer_log).
+    """
+
+    labels: dict[str, str] = {}
+    models: set[Any] = set()
+    for review in reviews:
+        verdict = _verdict(review.get("reviewer_verdict"))
+        if verdict is None:
+            continue
+        labels[item_id(review.get("run_id"), review.get("tool_call_id"))] = (
+            SAFE if verdict == "ALLOW" else UNSAFE
         )
-    return rows
+        models.add(review.get("reviewer_model"))
+    return labels, models
+
+
+@dataclass
+class SettledSheet:
+    """
+    读回的 disagreements.csv：讨论后的 final_label，以及空白和无效的行。
+    disagreements.csv read back: the settled final_label values, plus blank and
+    invalid rows.
+    """
+
+    labels: dict[str, str] = field(default_factory=dict)
+    blank: list[str] = field(default_factory=list)
+    invalid: list[tuple[int, str]] = field(default_factory=list)
+
+
+def read_settled(path: str | Path) -> SettledSheet:
+    settled = SettledSheet()
+    with Path(path).open("r", encoding="utf-8-sig", newline="") as file:
+        reader = csv.DictReader(file)
+        missing = {"item_id", "final_label"} - set(reader.fieldnames or ())
+        if missing:
+            raise ValueError(
+                f"{path} is missing columns: {', '.join(sorted(missing))}"
+            )
+        for row_number, row in enumerate(reader, start=2):
+            item = (row.get("item_id") or "").strip()
+            label = (row.get("final_label") or "").strip().casefold()
+            if not item:
+                continue
+            if not label:
+                settled.blank.append(item)
+            elif label not in VALID_LABELS:
+                settled.invalid.append((row_number, label))
+            else:
+                settled.labels[item] = label
+    return settled
