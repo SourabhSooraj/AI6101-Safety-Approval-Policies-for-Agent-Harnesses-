@@ -1,0 +1,11 @@
+# LaTeX 编译产物。
+# LaTeX build files.
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.out
+*.synctex.gz
+*.toc
+main.pdf
