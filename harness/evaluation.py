@@ -175,6 +175,9 @@ class Run:
     reviewer_records: list[dict[str, Any]] = field(default_factory=list)
     models: dict[str, Any] = field(default_factory=dict)
     split: str | None = None
+    # 攻击方法（run_summary 的 attack_mode）；无攻击时为 "none"。
+    # The attack method (attack_mode in run_summary); "none" without an attack.
+    attack_mode: str = NO_ATTACK
 
     @property
     def finished(self) -> bool:
@@ -197,8 +200,17 @@ class Run:
         return tuple(self.config.get(key) for key in FAMILY_KEYS)
 
     @property
-    def unit(self) -> tuple[str, str | None]:
-        return self.task_id, self.injection_task_id
+    def unit(self) -> tuple[str, str | None, str]:
+        """
+        (task, 注入任务, 攻击方法)：不同攻击方法的结果不会互相替换，McNemar 也只配对
+        同一种攻击。攻击方法不放进 FAMILY_KEYS，否则无攻击的运行会把 setup 分成两组。
+        (task, injection task, attack method): results from different attack
+        methods never replace each other, and McNemar only pairs the same attack.
+        The attack method is kept out of FAMILY_KEYS, or no-attack runs would
+        split each setup in two.
+        """
+
+        return self.task_id, self.injection_task_id, self.attack_mode
 
     @property
     def attack_type(self) -> str | None:
@@ -242,6 +254,24 @@ def _summary_models(summary: dict[str, Any]) -> dict[str, Any]:
         "judge": summary.get("judge_model"),
         "reviewer": summary.get("reviewer_model"),
     }
+
+
+def _attack_mode(
+    summary: dict[str, Any] | None,
+    batch_config: dict[str, Any],
+    injection_task_id: str | None,
+) -> str:
+    """
+    完成的运行读 run_summary；崩溃的运行和旧日志用 batch_config 的 attack。
+    Finished runs read run_summary; crashed runs and older logs use the
+    batch_config attack.
+    """
+
+    if injection_task_id is None:
+        return NO_ATTACK
+    if summary is not None and summary.get("attack_mode"):
+        return str(summary["attack_mode"])
+    return str(batch_config.get("attack") or "unknown")
 
 
 def _crashed_config(
@@ -319,6 +349,11 @@ def load_batch(batch_dir: Path) -> tuple[list[Run], list[str]]:
                 reviewer_records=_read_jsonl(episode_dir / "reviewer_decisions.jsonl"),
                 models=_summary_models(summary),
                 split=batch_config.get("split"),
+                attack_mode=_attack_mode(
+                    summary,
+                    batch_config,
+                    None if injection == NO_ATTACK else injection,
+                ),
             )
         )
 
@@ -356,6 +391,11 @@ def load_batch(batch_dir: Path) -> tuple[list[Run], list[str]]:
                 reviewer_records=_read_jsonl(episode_dir / "reviewer_decisions.jsonl"),
                 models=batch_models,
                 split=batch_config.get("split"),
+                attack_mode=_attack_mode(
+                    None,
+                    batch_config,
+                    None if injection == NO_ATTACK else injection,
+                ),
             )
         )
     return runs, warnings
@@ -375,30 +415,37 @@ def load_runs(
 
     runs: dict[tuple, Run] = {}
     warnings: list[str] = []
-    # 在去重之前收集：被后一个 batch 替换掉的运行也说明混用了划分。
+    # 在去重之前收集：被后一个 batch 替换掉的运行也说明混用了模型或划分。
     # Collect before removing duplicates: a run replaced by a later batch
-    # still shows that splits were mixed.
+    # still shows that models or splits were mixed.
     splits: set[str] = set()
+    model_sets: set[tuple] = set()
     for batch_dir in batch_dirs:
         batch_runs, batch_warnings = load_batch(Path(batch_dir))
         warnings += batch_warnings
         splits |= {str(run.split) for run in batch_runs if run.split}
+        model_sets |= {
+            tuple(sorted((str(k), str(v)) for k, v in run.models.items()))
+            for run in batch_runs
+        }
         for run in batch_runs:
             key = (run.config_key, run.unit)
             if key in runs:
+                attack = (
+                    f" ({run.attack_mode})" if run.injection_task_id else ""
+                )
                 warnings.append(
-                    f"{run.task_id} / {run.injection_task_id or NO_ATTACK} / "
+                    f"{run.task_id} / {run.injection_task_id or NO_ATTACK}{attack} / "
                     f"{run.setup} appears in {runs[key].batch} and {run.batch}; "
                     f"using {run.batch}"
                 )
             runs[key] = run
 
     result = list(runs.values())
-    model_sets = sorted(
-        {tuple(sorted((str(k), str(v)) for k, v in run.models.items())) for run in result}
-    )
     if len(model_sets) > 1 and not allow_mixed_models:
-        described = ["; ".join(f"{k}={v}" for k, v in models) for models in model_sets]
+        described = [
+            "; ".join(f"{k}={v}" for k, v in models) for models in sorted(model_sets)
+        ]
         raise ValueError(
             "runs use different models (pass --allow-mixed-models to combine "
             "them anyway): " + " | ".join(described)
@@ -470,8 +517,20 @@ def hitl_metrics(runs: Sequence[Run]) -> dict[str, Any]:
     ]
     reviews = [record for run in runs for record in run.reviewer_records]
     count = len(runs)
+    # 题目对 HITL load 的定义：所有成功完成（safe_task_completion）的任务中的升级总数。
+    # 崩溃的运行永远不算完成。
+    # The brief defines HITL load as the total escalations across all
+    # successfully completed tasks (safe_task_completion). Crashed runs never
+    # count as completed.
+    completed = [
+        escalated
+        for run, (escalated, _) in zip(runs, escalations)
+        if run.flag("safe_task_completion") is True
+    ]
     return {
         "runs": count,
+        "completed_runs": len(completed),
+        "escalations_completed": sum(completed),
         "escalations": sum(escalated for escalated, _ in escalations),
         "escalations_per_run": (
             sum(escalated for escalated, _ in escalations) / count if count else None
@@ -679,16 +738,25 @@ def evaluate(runs: Sequence[Run]) -> dict[str, Any]:
             for key in ordered
         ]
 
-    def breakdown(key: Callable[[Run], Any], name: str):
+    def breakdown(key: Callable[[Run], tuple], names: tuple[str, ...]):
+        """
+        names 是分组键各部分的列名，key 返回同样长度的元组。
+        names are the column names of the parts of the grouping key; key
+        returns a tuple of the same length.
+        """
+
         rows = []
         for config in ordered:
             groups = _group(by_config[config], key)
-            for value in sorted(groups, key=lambda item: (item is None, str(item))):
+            for value in sorted(groups, key=lambda item: [(part is None, str(part)) for part in item]):
                 rows.append(
                     {
                         "setup": labels[config],
                         "k": k_label(config[-1]),
-                        name: value if value is not None else NO_ATTACK,
+                        **{
+                            name: part if part is not None else NO_ATTACK
+                            for name, part in zip(names, value)
+                        },
                         **outcome_metrics(groups[value]),
                     }
                 )
@@ -703,7 +771,13 @@ def evaluate(runs: Sequence[Run]) -> dict[str, Any]:
         "tcr_at_k": tcr_at_k(runs),
         "hitl": per_config(hitl_metrics),
         "cost": per_config(cost_metrics),
-        "by_attack_type": breakdown(lambda run: run.attack_type, "attack_type"),
-        "by_user_task": breakdown(lambda run: run.task_id, "task_id"),
+        # 攻击方法和攻击类型分开列，两种攻击方法的结果不会混在一起。
+        # Attack method and attack type in separate columns, so results from
+        # two attack methods are never pooled.
+        "by_attack_type": breakdown(
+            lambda run: (run.attack_mode, run.attack_type),
+            ("attack_mode", "attack_type"),
+        ),
+        "by_user_task": breakdown(lambda run: (run.task_id,), ("task_id",)),
         "mcnemar": mcnemar_comparisons(runs),
     }
