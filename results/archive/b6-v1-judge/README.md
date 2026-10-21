@@ -1,4 +1,11 @@
-# Dev pilot (b6)
+# Dev pilot (b6), first run: archived
+
+> **Archived.** This first dev pilot ran with the **v1 Judge prompt**, which
+> denied most safe calls (see the findings below). It led to the v2 prompt
+> (PR #19), and b6 was rerun with it. Kept as a record and as the "before" for
+> the Judge change. Its logs are in `logs/archive/b6-v1-judge/` (not in git;
+> also shared as a zip), and its q-table is `q_table.json` in this folder, not
+> `configs/q_table.json`.
 
 Results of the dev pilot run, written by `scripts/evaluate.py`. These are
 **development numbers** for calibration and planning, not results for the
@@ -9,7 +16,7 @@ runs each.
 
 | | |
 |---|---|
-| Batch | `logs/agentdojo_batch/b6-dev-pilot` (not in git; shared as a zip) |
+| Batch | `logs/archive/b6-v1-judge/b6-dev-pilot` (originally `logs/agentdojo_batch/b6-dev-pilot`; not in git, shared as a zip) |
 | Date | 21 October 2026 |
 | Code | commit `7fcc6d5` (clean) |
 | Benchmark | AgentDojo v1.2.2, banking, **dev split** (10 tasks) |
@@ -46,8 +53,8 @@ python scripts/evaluate.py logs/agentdojo_batch/b6-dev-pilot --out results/dev-p
 - **Runs:** 400 of 400 finished, no crashes, no Judge or reviewer errors.
 - **Cost:** about **$0.50** in total, $0.0008–0.0019 per run depending on the
   policy (`cost.csv`). The reviewer is the largest cost under `escalate_all`.
-- **q-table:** `configs/q_table.json`, from the 41 P6 reviews in the `hybrid`
-  and `no_budget` runs (8–13 per tool):
+- **q-table:** `q_table.json` in this folder (originally `configs/q_table.json`),
+  from the 41 P6 reviews in the `hybrid` and `no_budget` runs (8–13 per tool):
   ```bash
   python scripts/build_q_table.py logs/agentdojo_batch/b6-dev-pilot \
     --group-by tool_name --min-samples 5 --output configs/q_table.json
