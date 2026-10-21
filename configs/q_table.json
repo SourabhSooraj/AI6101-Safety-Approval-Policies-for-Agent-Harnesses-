@@ -1,0 +1,6 @@
+{
+  "schedule_transaction": 0.5,
+  "send_money": 0.6923076923076923,
+  "update_password": 0.5,
+  "update_scheduled_transaction": 0.375
+}
