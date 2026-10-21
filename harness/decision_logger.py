@@ -53,6 +53,11 @@ class DecisionLogger:
             "judge_success": result.judge_success,
             "judge_disagreement": result.judge_disagreement,
             "judge_error": result.judge_error,
+            "judge_reason": result.judge_reason,
+            "judge_scores": (
+                list(result.judge_scores) if result.judge_scores is not None else None
+            ),
+            "judge_prompt_version": result.judge_prompt_version,
             "model_name": result.model_name,
             "input_tokens": result.input_tokens,
             "output_tokens": result.output_tokens,
