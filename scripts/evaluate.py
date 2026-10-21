@@ -3,8 +3,8 @@
 
     python scripts/evaluate.py logs/agentdojo_batch/<batch_id> --out results/dev
 
-打印主要表格，并在 --out 中写入 results.json、每张表一个 CSV，以及
-tcr_at_k.csv。装了 matplotlib 时额外画 tcr_at_k.png（不是必需的依赖）。
+打印主要表格，并在 --out 中写入 results.json、每张表一个 CSV（含
+tcr_at_k.csv），以及 TCR@k 曲线图 tcr_at_k.png 和 tcr_at_k.pdf。
 """
 
 import argparse
@@ -13,6 +13,12 @@ import json
 import sys
 from pathlib import Path
 from typing import Any
+
+import matplotlib
+
+# 无界面后端：在服务器和 Colab 上也能保存图片。
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -71,16 +77,11 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(flat_rows)
 
 
-def plot_tcr_at_k(rows: list[dict[str, Any]], path: Path) -> bool:
-    """装了 matplotlib 时画 TCR@k 曲线（含 95% Wilson 区间）；否则返回 False。"""
+PLOT_FORMATS = ("png", "pdf")
 
-    try:
-        import matplotlib
 
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-    except ImportError:
-        return False
+def plot_tcr_at_k(rows: list[dict[str, Any]], out_dir: Path) -> list[Path]:
+    """画 TCR@k 曲线（含 95% Wilson 区间），保存为 PNG 和 PDF，返回写出的文件。"""
 
     finite = sorted({int(row["k"]) for row in rows if row["k"] != "unlimited"})
     figure, axes = plt.subplots(figsize=(7, 4.5))
@@ -118,9 +119,15 @@ def plot_tcr_at_k(rows: list[dict[str, Any]], path: Path) -> bool:
     axes.legend(fontsize=8)
     axes.grid(alpha=0.3)
     figure.tight_layout()
-    figure.savefig(path, dpi=150)
+    paths = []
+    for extension in PLOT_FORMATS:
+        path = out_dir / f"tcr_at_k.{extension}"
+        # 不写创建时间，同样的数据生成同样的 PDF，方便放进报告的版本控制。
+        metadata = {"CreationDate": None} if extension == "pdf" else None
+        figure.savefig(path, dpi=150, metadata=metadata)
+        paths.append(path)
     plt.close(figure)
-    return True
+    return paths
 
 
 def _cell(value: Any) -> str:
@@ -164,7 +171,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--out",
         type=Path,
-        help="Folder for results.json, the CSV tables and tcr_at_k.png.",
+        help=(
+            "Folder for results.json, the CSV tables and the TCR@k plot "
+            "(tcr_at_k.png and tcr_at_k.pdf)."
+        ),
     )
     parser.add_argument(
         "--allow-mixed-models",
@@ -234,9 +244,8 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
         )
         for table in TABLES:
             write_csv(args.out / f"{table}.csv", results[table])
-        plotted = plot_tcr_at_k(results["tcr_at_k"], args.out / "tcr_at_k.png")
-        print(f"\nwrote {args.out}" + ("" if plotted else
-              " (matplotlib not installed: tcr_at_k.png skipped, see tcr_at_k.csv)"))
+        plot_tcr_at_k(results["tcr_at_k"], args.out)
+        print(f"\nwrote {args.out}")
     return results
 
 
