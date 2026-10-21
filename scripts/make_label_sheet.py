@@ -3,6 +3,11 @@
 The sheet never shows the reviewer's verdict, so humans label blind.
 With --ground-truth, calls that AgentDojo's ground truth settles are
 pre-labelled; the rest are left blank for a human.
+
+With --labellers, each labeller also gets their own copy in a different
+shuffled order, with only an opaque item_id, the user request, the tool and
+its arguments: no run_id (it names the injection task), no ground-truth
+pre-labels. scripts/label_agreement.py reads the copies back.
 """
 
 import argparse
@@ -17,6 +22,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from harness.ground_truth_labels import GroundTruthCall, label_call
+from harness.label_agreement import item_id, labeller_rows, write_labeller_sheet
 from harness.reviewer_errors import read_reviewer_log, write_label_sheet
 from harness.tool_metadata import BANKING_TOOL_METADATA
 
@@ -92,6 +98,7 @@ def build_rows(
             )
         rows.append(
             {
+                "item_id": item_id(review.get("run_id"), review.get("tool_call_id")),
                 "run_id": review.get("run_id"),
                 "tool_call_id": review.get("tool_call_id"),
                 "task_id": review.get("task_id"),
@@ -153,13 +160,53 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Pre-label calls that AgentDojo's ground truth settles. Dev runs only.",
     )
+    parser.add_argument(
+        "--labellers",
+        nargs="+",
+        default=[],
+        help=(
+            "Also write one shuffled copy per labeller, <output>_<name>.csv, "
+            "for scripts/label_agreement.py."
+        ),
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=6101,
+        help="Seed for the labellers' row order (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--include-prelabelled",
+        action="store_true",
+        help=(
+            "Put the ground-truth rows in the labellers' copies too (with the "
+            "label hidden), to check the labellers against ground truth."
+        ),
+    )
     parser.add_argument("--benchmark-version", default="v1.2.2")
     parser.add_argument("--suite", default="banking")
     return parser
 
 
-def main() -> None:
-    args = build_parser().parse_args()
+def labeller_paths(output: str | Path, labellers: Iterable[str]) -> dict[str, Path]:
+    """<output>_<name>.csv for each labeller; names must be unique and file-safe."""
+
+    output = Path(output)
+    paths: dict[str, Path] = {}
+    for name in labellers:
+        if not name or not all(ch.isalnum() or ch in "-_" for ch in name):
+            raise SystemExit(
+                f"Labeller name {name!r} may only use letters, digits, '-' and '_'"
+            )
+        if name in paths:
+            raise SystemExit(f"Labeller {name!r} is listed twice")
+        paths[name] = output.with_name(f"{output.stem}_{name}{output.suffix or '.csv'}")
+    return paths
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = build_parser().parse_args(argv)
+    copies = labeller_paths(args.output, args.labellers)
     reviews = read_reviews(reviewer_log_paths(args.reviewer_logs))
     ground_truth = (
         agentdojo_ground_truth(args.benchmark_version, args.suite)
@@ -172,6 +219,11 @@ def main() -> None:
     print(f"Wrote {count} reviewed calls to {args.output}")
     if args.ground_truth:
         print(f"Pre-labelled from ground truth: {labelled}; needs a human: {count - labelled}")
+    for name, path in copies.items():
+        written = write_labeller_sheet(
+            labeller_rows(rows, name, args.seed, args.include_prelabelled), path
+        )
+        print(f"Wrote {written} calls for {name} to {path}")
 
 
 if __name__ == "__main__":
