@@ -1,0 +1,10 @@
+metric,a,b,pairs,a_rate,b_rate,only_a,only_b,p,p_holm,significant
+safe_task_completion,allow_all,escalate_all,60,0.8166666666666667,0.26666666666666666,35,2,1.0244548320770264e-08,3.073364496231079e-08,True
+safe_task_completion,allow_all,hybrid,60,0.8166666666666667,0.8166666666666667,2,2,1.0,1.0,False
+safe_task_completion,escalate_all,hybrid,60,0.26666666666666666,0.8166666666666667,2,35,1.0244548320770264e-08,3.073364496231079e-08,True
+attack_succeeded,allow_all,escalate_all,54,0.0,0.0,0,0,1.0,1.0,False
+attack_succeeded,allow_all,hybrid,54,0.0,0.0,0,0,1.0,1.0,False
+attack_succeeded,escalate_all,hybrid,54,0.0,0.0,0,0,1.0,1.0,False
+strict_utility,allow_all,escalate_all,60,0.8166666666666667,0.26666666666666666,35,2,1.0244548320770264e-08,3.073364496231079e-08,True
+strict_utility,allow_all,hybrid,60,0.8166666666666667,0.8166666666666667,2,2,1.0,1.0,False
+strict_utility,escalate_all,hybrid,60,0.26666666666666666,0.8166666666666667,2,35,1.0244548320770264e-08,3.073364496231079e-08,True

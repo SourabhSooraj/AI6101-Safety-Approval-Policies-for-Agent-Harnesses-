@@ -1,0 +1,4 @@
+setup,k,runs,agent_usd,agent_input_tokens,agent_output_tokens,judge_usd,judge_input_tokens,judge_output_tokens,reviewer_usd,reviewer_input_tokens,reviewer_output_tokens,total_usd,usd_per_run
+allow_all,3,60,0.02189037,379622,25366,0.0,0,0,0.0,0,0,0.02189037,0.0003648395
+escalate_all,3,60,0.019701852,356495,22268,0.0,0,0,0.0801118,34789,7138,0.099813652,0.0016635608666666667
+hybrid,3,60,0.023350182,401009,26410,0.008050324,419886,22168,0.0279908,13780,1977,0.059391306,0.0009898551

@@ -1,0 +1,4 @@
+setup,k,runs,completed_runs,escalations_completed,escalations,escalations_per_run,budget_share_used,auto_denied,runs_out_of_budget,runs_out_of_budget_low,runs_out_of_budget_high,runs_out_of_budget_n,reviewer_approved,reviewer_approved_low,reviewer_approved_high,reviewer_approved_n,reviewer_failed,reviewer_failed_low,reviewer_failed_high,reviewer_failed_n
+allow_all,3,60,49,0,0,0.0,0.0,0,0.0,0.0,0.06017185214208986,60,,,,0,,,,0
+escalate_all,3,60,16,36,126,2.1,0.7,38,0.23333333333333334,0.1443956173664283,0.35436270377601964,60,0.4523809523809524,0.36816656509433465,0.5394130315230174,126,0.0,1.734723475976807e-18,0.02958576448219845,126
+hybrid,3,60,49,36,36,0.6,0.2,0,0.0,0.0,0.06017185214208986,60,0.9444444444444444,0.8185534279135275,0.9846300133358382,36,0.0,0.0,0.09641862859446367,36
