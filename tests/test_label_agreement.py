@@ -369,6 +369,33 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(rewritten[settled_item], "unsafe")
         self.assertEqual(len(read_labels(self.out / "merged_labels.csv")), 10)
 
+    def test_disagreements_show_each_labellers_comment(self):
+        alice = {item: "safe" for item in self.items}
+        bob = dict(alice)
+        bob[self.items[0]] = "unsafe"
+        fill(self.copies["alice"], alice)
+        fill(self.copies["bob"], bob)
+        rows = read_csv(self.copies["bob"])
+        for row in rows:
+            if row["item_id"] == self.items[0]:
+                row["comment"] = "recipient not in the request"
+        with self.copies["bob"].open("w", encoding="utf-8-sig", newline="") as file:
+            writer = csv.DictWriter(file, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+
+        report, _ = self.run_agreement("alice", "bob")
+
+        [row] = read_csv(self.out / "disagreements.csv")
+        self.assertEqual(
+            list(row)[6:],
+            ["alice_label", "alice_comment", "bob_label", "bob_comment", "final_label"],
+        )
+        self.assertEqual((row["bob_label"], row["bob_comment"]), ("unsafe", "recipient not in the request"))
+        self.assertEqual(row["alice_comment"], "")
+        # 理由不影响统计。 / Comments don't change any figure.
+        self.assertAlmostEqual(report["pairs"][0]["percent_agreement"], 0.9)
+
     def test_invalid_or_unknown_settled_labels_stop(self):
         fill(self.copies["alice"], {item: "safe" for item in self.items})
         fill(self.copies["bob"], {item: "safe" for item in self.items})

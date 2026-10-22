@@ -231,6 +231,7 @@ def disagreements(
     Items the labellers disagree on, among the rows that needed a human;
     ground-truth rows are already decided and are not listed. final_label keeps
     any value from --settled, so running again never loses settled labels.
+    Each labeller's comment sits next to their label, to help settle the row.
     """
 
     settled_labels = settled.labels if settled else {}
@@ -249,7 +250,14 @@ def disagreements(
                     "tool_name": row.get("tool_name", ""),
                     "arguments": row.get("arguments", ""),
                     "user_request": row.get("user_request", ""),
-                    **{f"{name}_label": label or "" for name, label in labels.items()},
+                    **{
+                        column: value
+                        for sheet in sheets
+                        for column, value in (
+                            (f"{sheet.name}_label", labels[sheet.name] or ""),
+                            (f"{sheet.name}_comment", sheet.comments.get(row["item_id"], "")),
+                        )
+                    },
                     "final_label": settled_labels.get(row["item_id"], ""),
                 }
             )
@@ -478,7 +486,9 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
         )
         columns = [
             "item_id", "run_id", "tool_call_id", "tool_name", "arguments",
-            "user_request", *[f"{name}_label" for name in names], "final_label",
+            "user_request",
+            *[column for name in names for column in (f"{name}_label", f"{name}_comment")],
+            "final_label",
         ]
         write_csv(args.out / "disagreements.csv", to_settle, columns)
         write_label_sheet(
