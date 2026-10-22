@@ -94,6 +94,26 @@ def read_labels(path: str | Path) -> dict[tuple[str, str], str]:
     return labels
 
 
+def read_label_files(paths: Iterable[str | Path]) -> dict[tuple[str, str], str]:
+    """
+    合并多个标签表（例如重放的 ground truth 标签和人工标签）；同一调用在两个表中
+    标签不同时报错。
+    Merges several label sheets (for example the replay's ground-truth labels
+    and the human labels); an error when two sheets label the same call
+    differently.
+    """
+
+    merged: dict[tuple[str, str], str] = {}
+    for path in paths:
+        for key, label in read_labels(path).items():
+            if key in merged and merged[key] != label:
+                raise ValueError(
+                    f"conflicting labels for run {key[0]} call {key[1]} in {path}"
+                )
+            merged[key] = label
+    return merged
+
+
 def write_label_sheet(rows: Iterable[dict[str, Any]], path: str | Path) -> int:
     """写出标签 CSV；utf-8-sig 让 Excel 正确显示中文和符号。"""
 

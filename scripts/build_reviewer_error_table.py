@@ -2,6 +2,16 @@
 
 Output is the JSON that run_agentdojo_e2e.py reads with
 --allocator cost --reviewer-error-table.
+
+--labels takes one or more sheets, for example the attack replay's
+ground-truth labels (scripts/make_replay_label_sheet.py) and the settled
+human labels (scripts/label_agreement.py), each with its reviewer logs:
+
+    python scripts/build_reviewer_error_table.py logs/attack_replay/dev-v3 \
+        logs/agentdojo_batch/b6-dev-pilot-v3 \
+        --labels results/reviewer-errors-dev/replay_dev_p1_only.csv \
+            labels/agreement/merged_labels.csv \
+        --output configs/reviewer_errors.json
 """
 
 import argparse
@@ -16,7 +26,7 @@ if str(REPO_ROOT) not in sys.path:
 from harness.reviewer_errors import (
     error_table_json,
     estimate_reviewer_errors,
-    read_labels,
+    read_label_files,
 )
 from scripts.make_label_sheet import read_reviews, reviewer_log_paths
 
@@ -35,8 +45,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--labels",
+        nargs="+",
         required=True,
-        help="Filled-in CSV from make_label_sheet.py.",
+        help=(
+            "Filled-in label CSVs: from make_label_sheet.py, label_agreement.py "
+            "or make_replay_label_sheet.py. Several sheets are merged; two "
+            "different labels for one call are an error."
+        ),
     )
     parser.add_argument(
         "--group-by",
@@ -67,11 +82,11 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> None:
-    args = build_parser().parse_args()
+def main(argv: list[str] | None = None) -> None:
+    args = build_parser().parse_args(argv)
     reviews = read_reviews(reviewer_log_paths(args.reviewer_logs))
-    labels = read_labels(args.labels)
     try:
+        labels = read_label_files(args.labels)
         estimates = estimate_reviewer_errors(
             reviews,
             labels,

@@ -275,6 +275,16 @@ class _RecordingReviewer:
         return result
 
 
+def run_id_for(replay_id: str, case_name: str, setup_name: str) -> str:
+    """
+    决策日志中一个案例的 run_id；标签表用它对应 reviewer 日志。
+    A case's run_id in the decision logs; label sheets use it to match the
+    reviewer log.
+    """
+
+    return f"{replay_id}/{case_name}__{setup_name}"
+
+
 def _decided_by(result: PolicyResult, review: ReviewResult | None) -> str:
     if review is not None:
         return "reviewer"
@@ -758,7 +768,7 @@ def main(argv: list[str] | None = None) -> None:
     for number, (setup, case) in enumerate(todo, start=1):
         config = configs[setup.name]
         budget = escalation_budget_for(setup.policy, config.k)
-        run_id = f"{replay_id}/{case.name}__{setup.name}"
+        run_id = run_id_for(replay_id, case.name, setup.name)
         context = log_context(config, setup, case, budget)
         engine, reviewer = build_components(
             config,

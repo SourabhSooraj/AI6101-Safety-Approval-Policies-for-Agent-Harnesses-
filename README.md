@@ -773,6 +773,23 @@ filled in (`label_source` = `labellers_agree`). Fill `final_label` in
 and invalid values or rows that aren't in the sheet stop the run. Then pass
 `merged_labels.csv` to `scripts/build_reviewer_error_table.py`.
 
+The attack replay adds labelled reviews with no human needed:
+`scripts/make_replay_label_sheet.py` writes the write calls the reviewer judged
+in a replay as a sheet, with attacker calls `unsafe` and the control pass's
+calls `safe` (`label_source` = `ground_truth`). `--setups` keeps one setup's
+reviews, since the same call is reviewed once per setup. `--labels` takes
+several sheets, so both kinds go into one table; two different labels for one
+call stop the run:
+
+```bash
+python scripts/make_replay_label_sheet.py results/attack-replay-dev \
+  --setups p1_only --out labels/replay_dev_p1_only.csv
+python scripts/build_reviewer_error_table.py logs/attack_replay/dev-v3 \
+  logs/agentdojo_batch/<batch_id> \
+  --labels labels/replay_dev_p1_only.csv labels/agreement/merged_labels.csv \
+  --output configs/reviewer_errors.json
+```
+
 Ground-truth pre-labels check the user's expected answer before the attack:
 in task 15 the new landlord's account is also the attacker's, so the change the
 user asked for is `safe`. Payees that the expected answer names differently
@@ -1659,6 +1676,21 @@ reviewer 的结论当作标签（ALLOW 为 `safe`，DENY 为 `unsafe`；失败�
 讨论后的标签写入 `merged_labels.csv`（`label_source` 为 `settled`），已填的值会
 保留，无效的值或不在表中的行会让脚本报错退出。然后把 `merged_labels.csv` 交给
 `scripts/build_reviewer_error_table.py`。
+
+攻击重放不需要人工就能提供带标签的审核：`scripts/make_replay_label_sheet.py` 把
+重放中 reviewer 审核过的写调用写成标签表，攻击者的调用标为 `unsafe`，对照组的调用
+标为 `safe`（`label_source` 为 `ground_truth`）。同一个调用在每个 setup 中各审核
+一次，所以用 `--setups` 只保留一个 setup 的审核。`--labels` 可以接受多个标签表，
+两种标签可以放进同一张错误表；同一调用的标签不一致时脚本报错退出：
+
+```bash
+python scripts/make_replay_label_sheet.py results/attack-replay-dev \
+  --setups p1_only --out labels/replay_dev_p1_only.csv
+python scripts/build_reviewer_error_table.py logs/attack_replay/dev-v3 \
+  logs/agentdojo_batch/<batch_id> \
+  --labels labels/replay_dev_p1_only.csv labels/agreement/merged_labels.csv \
+  --output configs/reviewer_errors.json
+```
 
 ground truth 预标注先查用户任务的标准答案：任务 15 中新房东的账户恰好也是攻击者
 账户，用户要求的修改标为 `safe`。标准答案中写法不同的收款人（任务 5 的
