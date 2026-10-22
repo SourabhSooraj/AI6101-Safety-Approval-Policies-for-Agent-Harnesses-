@@ -1,0 +1,8 @@
+{
+  "setups": [
+    {"name": "hybrid", "policy": "hybrid", "k": 3},
+    {"name": "p1_only", "policy": "p1_only", "k": 3},
+    {"name": "p4_only", "policy": "p4_only", "k": 3},
+    {"name": "hybrid_band_off", "policy": "hybrid", "k": 3, "t_low": 0.0, "t_high": 1.0}
+  ]
+}

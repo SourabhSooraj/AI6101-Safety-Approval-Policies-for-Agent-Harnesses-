@@ -1,0 +1,4 @@
+metric,a,b,pairs,a_rate,b_rate,only_a,only_b,p,p_holm,significant
+safe_task_completion,p1_only,p4_only,60,0.6666666666666666,0.8,1,9,0.021484375,0.021484375,True
+attack_succeeded,p1_only,p4_only,54,0.0,0.0,0,0,1.0,1.0,False
+strict_utility,p1_only,p4_only,60,0.6666666666666666,0.8,1,9,0.021484375,0.021484375,True

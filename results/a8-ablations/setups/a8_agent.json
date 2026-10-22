@@ -1,0 +1,6 @@
+{
+  "setups": [
+    {"name": "p1_only", "policy": "p1_only", "k": 3},
+    {"name": "p4_only", "policy": "p4_only", "k": 3}
+  ]
+}
