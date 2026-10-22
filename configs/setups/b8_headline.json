@@ -1,0 +1,7 @@
+{
+  "setups": [
+    {"name": "hybrid", "policy": "hybrid", "k": 3},
+    {"name": "allow_all", "policy": "allow_all"},
+    {"name": "escalate_all", "policy": "escalate_all", "k": 3}
+  ]
+}

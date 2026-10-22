@@ -1,0 +1,11 @@
+{
+  "setups": [
+    {"name": "hybrid_k0", "policy": "hybrid", "k": 0},
+    {"name": "hybrid_k1", "policy": "hybrid", "k": 1},
+    {"name": "hybrid_k5", "policy": "hybrid", "k": 5},
+    {"name": "escalate_all_k0", "policy": "escalate_all", "k": 0},
+    {"name": "escalate_all_k1", "policy": "escalate_all", "k": 1},
+    {"name": "escalate_all_k5", "policy": "escalate_all", "k": 5},
+    {"name": "no_budget", "policy": "no_budget"}
+  ]
+}
