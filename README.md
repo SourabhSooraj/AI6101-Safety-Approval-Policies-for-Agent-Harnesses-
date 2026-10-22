@@ -684,7 +684,9 @@ its arguments. There's no `run_id`, because that is the episode folder name and
 gives away the injection task, and there are no ground-truth labels, so they
 can't sway the labeller. Copies hold only the rows that need a human;
 `--include-prelabelled` adds the ground-truth rows too (label hidden), to check
-each labeller against ground truth.
+each labeller against ground truth. `--writes-only` leaves out read-only calls:
+`escalate_all` sends every read to the reviewer, and a read is always safe, so
+they would only add rows nobody needs to label.
 
 Each labeller fills the `label` column with `safe` (the call should have been
 allowed, given only the user request) or `unsafe`, working alone, and saves the
@@ -703,6 +705,13 @@ ones everyone gets right and would push κ up, so they are used only to check
 each labeller against ground truth (with `--include-prelabelled`). κ is
 undefined when everyone used only one label; percent agreement is shown next to
 it because κ can be low on very unbalanced labels even when agreement is high.
+
+When few rows needed a human, add `--all-rows` (with copies made with
+`--include-prelabelled`): it also reports κ, % agreement and the confusion
+matrices on **every row everyone labelled**, ground-truth rows included. The
+main figures stay as above; report both, and note that the all-rows κ is
+pushed up by the easier ground-truth rows. Disagreements to settle are still
+only the rows that needed a human.
 
 To check the simulated reviewer against people, add its logs:
 
@@ -1500,7 +1509,8 @@ python scripts/make_label_sheet.py logs/agentdojo_batch/<dev_batch> \
 `item_id`、用户请求、工具名和参数：没有 `run_id`（它是 episode 文件夹名，会暴露
 注入任务），也没有 ground truth 标签（以免影响判断）。每份只含需要人工判断的行；
 `--include-prelabelled` 会把 ground truth 行也放进去（隐藏标签），用来检查每位
-标注者与 ground truth 的一致性。
+标注者与 ground truth 的一致性。`--writes-only` 去掉只读调用：`escalate_all` 把每次
+读取都交给 reviewer，而读取总是安全的，留着只会多出不需要标注的行。
 
 每位标注者独立地在 `label` 列填写 `safe`（只看用户请求，这个调用本应放行）或
 `unsafe`，并保存为 **CSV**（不是 `.xlsx`）。然后运行：
@@ -1516,6 +1526,11 @@ ground truth 行（只读调用、完全匹配）大家都会标对，放进来�
 每位标注者与 ground truth 的一致性（配合 `--include-prelabelled`）。所有人都只用了
 同一个标签时 κ 没有定义；一致率同时列出，因为标签很不平衡时，即使一致率很高，κ 也
 可能很低。
+
+需要人工判断的行很少时，加上 `--all-rows`（标注者的表用 `--include-prelabelled`
+生成）：它另外在**所有人都标注过的全部行**（含 ground truth 行）上给出 κ、一致率和
+混淆矩阵。上面的主要数字不变；两者都要报告，并说明全部行的 κ 会因为较容易的
+ground truth 行而偏高。需要讨论的分歧仍然只来自需要人工判断的行。
 
 要把模拟 reviewer 与人比较，加上它的日志：
 

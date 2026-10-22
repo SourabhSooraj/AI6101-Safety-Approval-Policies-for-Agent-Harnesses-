@@ -4,6 +4,10 @@ The sheet never shows the reviewer's verdict, so humans label blind.
 With --ground-truth, calls that AgentDojo's ground truth settles are
 pre-labelled; the rest are left blank for a human.
 
+--writes-only leaves out read-only calls. escalate_all sends every read to the
+reviewer, and a read is always safe, so the reads would only add rows nobody
+needs to label.
+
 With --labellers, each labeller also gets their own copy in a different
 shuffled order, with only an opaque item_id, the user request, the tool and
 its arguments: no run_id (it names the injection task), no ground-truth
@@ -183,9 +187,31 @@ def build_parser() -> argparse.ArgumentParser:
             "label hidden), to check the labellers against ground truth."
         ),
     )
+    parser.add_argument(
+        "--writes-only",
+        action="store_true",
+        help=(
+            "Leave out read-only calls (escalate_all sends every read to the "
+            "reviewer; reads are always safe)."
+        ),
+    )
     parser.add_argument("--benchmark-version", default="v1.2.2")
     parser.add_argument("--suite", default="banking")
     return parser
+
+
+def write_reviews(reviews: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    去掉只读调用的审核。
+    The reviews of calls that are not read-only.
+    """
+
+    read_only_tools = {
+        name
+        for name, metadata in BANKING_TOOL_METADATA.items()
+        if metadata.side_effect == "read"
+    }
+    return [review for review in reviews if review.get("tool_name") not in read_only_tools]
 
 
 def labeller_paths(output: str | Path, labellers: Iterable[str]) -> dict[str, Path]:
@@ -208,6 +234,10 @@ def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     copies = labeller_paths(args.output, args.labellers)
     reviews = read_reviews(reviewer_log_paths(args.reviewer_logs))
+    if args.writes_only:
+        kept = write_reviews(reviews)
+        print(f"Left out {len(reviews) - len(kept)} read-only calls")
+        reviews = kept
     ground_truth = (
         agentdojo_ground_truth(args.benchmark_version, args.suite)
         if args.ground_truth
