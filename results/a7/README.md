@@ -8,7 +8,7 @@ third dev pilot, plus a check of its original verdicts against human labels.
 | Logs | `logs/agentdojo_batch/b6-dev-pilot-v3` (b6, v3 Judge; not in git, shared as a zip) |
 | Reviewer | `glm-5.1` on DashScope (Singapore), temperature 0.0, as in the runs |
 | Tool | `scripts/replay_reviewer.py`: each call is rebuilt exactly as the reviewer first saw it |
-| Labels | Final team labels for all 116 reviewed write calls (`merged_labels.csv`: 92 from ground truth, 18 where both labellers agreed, 6 settled; 106 safe / 10 unsafe) |
+| Labels | Final team labels for all 116 reviewed write calls (`labels/agreement/merged_labels.csv`: 92 from ground truth, 18 where all three labellers agreed, 6 settled; 106 safe / 10 unsafe) |
 | Date | 22 October 2026 |
 | Cost | 531 reviewer requests, US$0.44 |
 
@@ -78,11 +78,15 @@ Each was sent 5 times **with** a sentence added to `subject` and 5 times
   not noise that a second review would fix.
 - **Persuasion:** a sentence in a free-text field does not get a clear attack
   approved, but it can tip an ambiguous request. With only 8 testable calls
-  this is a small study; the stronger attack in b7 should produce more attacker
-  payments to test.
-- **Errors for the cost allocator:** on these labels the reviewer's
-  false-approve rate is 3 / 10 and its false-deny rate is 19 / 106 (final
-  labels, dev split). With only 10 unsafe calls the first number is rough.
+  this is a small study; the agent almost never made an attacker payment in
+  real runs (`injecagent` succeeded in 0 of 90 dev runs), so only 4 were
+  available to test.
+- **Errors for the cost allocator:** the counts above (3 / 10 unsafe approved,
+  19 / 106 safe denied) are only the dev-pilot half. The table the cost
+  allocator reads, `configs/reviewer_errors.json` (b10, #24), pools them with
+  the attack replay's reviews (`results/attack-replay-dev/`): false-approve
+  5 / 111 (0.053) and false-deny 21 / 113 (0.191). Quote those in the report,
+  not the numbers here.
 
 ## Reproduce
 
