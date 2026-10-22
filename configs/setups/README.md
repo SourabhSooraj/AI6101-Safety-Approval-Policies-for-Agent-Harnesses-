@@ -10,6 +10,11 @@ README, "Batch runs and the dev/test split").
 
 ## b7: tuning the Judge thresholds (dev only)
 
+> **Not run.** The dev pilot and the attack replay settled every setting this
+> sweep would tune, so the default settings were kept. See
+> `results/b7-settings/README.md` for the settings and the evidence. The plan
+> below is kept for the record.
+
 In the dev pilot the Judge denied most calls outright (41 in `hybrid`, 38 of
 them safe by ground truth), so few calls reached the reviewer and the budget
 `k` hardly mattered. b7 tunes `t_high` with the current (v3) Judge prompt, in two stages:
