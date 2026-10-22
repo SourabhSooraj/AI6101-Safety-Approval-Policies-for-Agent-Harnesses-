@@ -103,11 +103,13 @@ class LabellerSheet:
     """
     读回的一份标注表：有效标签，以及空白、无效和重复的行（行号从表头后的 2 开始）。
     One labeller's sheet as read back: valid labels, plus blank, invalid and
-    duplicate rows (row numbers start at 2, after the header).
+    duplicate rows (row numbers start at 2, after the header). comments keeps
+    the non-empty comments by item_id; they never count as labels.
     """
 
     name: str
     labels: dict[str, str] = field(default_factory=dict)
+    comments: dict[str, str] = field(default_factory=dict)
     blank: list[str] = field(default_factory=list)
     invalid: list[tuple[int, str]] = field(default_factory=list)
     duplicates: list[str] = field(default_factory=list)
@@ -136,6 +138,11 @@ def read_labeller_sheet(path: str | Path, name: str) -> LabellerSheet:
             if item in sheet.labels or item in sheet.blank:
                 sheet.duplicates.append(item)
                 continue
+            # 理由只用于讨论分歧，不影响任何统计。
+            # Comments only help settle disagreements; no figure uses them.
+            comment = (row.get("comment") or "").strip()
+            if comment:
+                sheet.comments[item] = comment
             if not label:
                 sheet.blank.append(item)
             elif label not in VALID_LABELS:

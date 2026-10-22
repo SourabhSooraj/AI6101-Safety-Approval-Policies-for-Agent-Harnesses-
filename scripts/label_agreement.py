@@ -10,6 +10,12 @@ confusion matrix for each pair of labellers (Fleiss' kappa as well with three
 or more), on the rows that needed a human: ground-truth rows are only used to
 check each labeller against ground truth.
 
+--all-rows also reports agreement on every row all labellers labelled,
+ground-truth rows included (make the copies with make_label_sheet.py
+--include-prelabelled). It sits next to the main figures, which stay on the
+rows that needed a human: when those are few, the all-rows kappa is the one
+with enough items, though ground-truth rows are easier and push it up.
+
 --reviewer-logs adds the simulated reviewer's verdicts (ALLOW = safe,
 DENY = unsafe) and reports each labeller and the agreed human label against
 the reviewer, next to human-human agreement on the same rows (the ToolEmu
@@ -100,6 +106,7 @@ def agreement_report(
     sheets: list[LabellerSheet],
     reviewer: dict[str, str] | None = None,
     reviewer_models: set[Any] | None = None,
+    all_rows: bool = False,
 ) -> dict[str, Any]:
     """
     人与人的一致性只在需要人工判断的行上计算：ground truth 行（只读调用、完全
@@ -110,6 +117,12 @@ def agreement_report(
     would push kappa up. Ground-truth rows are used only to check each labeller
     against ground truth. With reviewer labels, humans vs the reviewer and
     humans vs each other are compared on the same rows.
+
+    all_rows=True 时另外给出所有人都标注过的全部行（含 ground truth 行）上的
+    κ，放在 "all_rows" 下；需要人工判断的行很少时，这个 κ 才有足够的样本。
+    With all_rows=True, kappa on every row everyone labelled (ground-truth rows
+    included) is added under "all_rows"; when few rows needed a human, this is
+    the kappa with enough items.
     """
 
     known = {row["item_id"] for row in master_rows}
@@ -141,6 +154,18 @@ def agreement_report(
             if any(item in truth for item in sheet.labels)
         ],
     }
+    if all_rows:
+        everyone = [
+            row["item_id"]
+            for row in master_rows
+            if all(row["item_id"] in sheet.labels for sheet in sheets)
+        ]
+        report["all_rows"] = {
+            "items_compared": len(everyone),
+            "ground_truth_rows": sum(item in truth for item in everyone),
+            "pairs": pairwise_agreement(sheets, everyone),
+            "fleiss_kappa": _fleiss(sheets, everyone),
+        }
     if reviewer is not None:
         report["reviewer"] = reviewer_report(
             sheets, complete, reviewer, reviewer_models or set(), known, truth
@@ -206,6 +231,7 @@ def disagreements(
     Items the labellers disagree on, among the rows that needed a human;
     ground-truth rows are already decided and are not listed. final_label keeps
     any value from --settled, so running again never loses settled labels.
+    Each labeller's comment sits next to their label, to help settle the row.
     """
 
     settled_labels = settled.labels if settled else {}
@@ -224,7 +250,14 @@ def disagreements(
                     "tool_name": row.get("tool_name", ""),
                     "arguments": row.get("arguments", ""),
                     "user_request": row.get("user_request", ""),
-                    **{f"{name}_label": label or "" for name, label in labels.items()},
+                    **{
+                        column: value
+                        for sheet in sheets
+                        for column, value in (
+                            (f"{sheet.name}_label", labels[sheet.name] or ""),
+                            (f"{sheet.name}_comment", sheet.comments.get(row["item_id"], "")),
+                        )
+                    },
                     "final_label": settled_labels.get(row["item_id"], ""),
                 }
             )
@@ -305,6 +338,17 @@ def print_report(report: dict[str, Any]) -> None:
         _print_pair(pair)
     if len(report["labellers"]) >= 3:
         print(f"\nFleiss' kappa (all labellers): {_fmt(report['fleiss_kappa'])}")
+    every = report.get("all_rows")
+    if every is not None:
+        print(
+            f"\nAll rows everyone labelled: {every['items_compared']} "
+            f"({every['ground_truth_rows']} of them ground-truth rows)"
+        )
+        for pair in every["pairs"]:
+            print()
+            _print_pair(pair)
+        if len(report["labellers"]) >= 3:
+            print(f"\nFleiss' kappa (all labellers, all rows): {_fmt(every['fleiss_kappa'])}")
     if report["versus_ground_truth"]:
         print("\nAgainst ground truth (ground-truth rows only):")
         for row in report["versus_ground_truth"]:
@@ -357,6 +401,14 @@ def build_parser() -> argparse.ArgumentParser:
             "reviewer_decisions.jsonl files, run folders or batch folders: add "
             "the simulated reviewer (ALLOW = safe, DENY = unsafe; failed "
             "reviews are left out) and compare it with the labellers."
+        ),
+    )
+    parser.add_argument(
+        "--all-rows",
+        action="store_true",
+        help=(
+            "Also report agreement on every row all labellers labelled, "
+            "ground-truth rows included (copies made with --include-prelabelled)."
         ),
     )
     parser.add_argument(
@@ -421,7 +473,7 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
                 "time, or pass --allow-mixed-models"
             )
 
-    report = agreement_report(master_rows, sheets, reviewer, models)
+    report = agreement_report(master_rows, sheets, reviewer, models, all_rows=args.all_rows)
     print_report(report)
     to_settle = disagreements(master_rows, sheets, settled)
     still_open = sum(not row["final_label"] for row in to_settle)
@@ -434,7 +486,9 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
         )
         columns = [
             "item_id", "run_id", "tool_call_id", "tool_name", "arguments",
-            "user_request", *[f"{name}_label" for name in names], "final_label",
+            "user_request",
+            *[column for name in names for column in (f"{name}_label", f"{name}_comment")],
+            "final_label",
         ]
         write_csv(args.out / "disagreements.csv", to_settle, columns)
         write_label_sheet(
