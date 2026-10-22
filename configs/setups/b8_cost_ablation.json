@@ -1,0 +1,11 @@
+{
+  "setups": [
+    {
+      "name": "hybrid_cost",
+      "policy": "hybrid",
+      "k": 3,
+      "allocator": "cost",
+      "reviewer_error_table": "configs/reviewer_errors.json"
+    }
+  ]
+}

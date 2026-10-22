@@ -1,0 +1,16 @@
+{
+  "setups": [
+    {"name": "hybrid", "policy": "hybrid", "k": 3},
+    {"name": "no_budget", "policy": "no_budget"},
+    {"name": "p1_only", "policy": "p1_only", "k": 3},
+    {"name": "escalate_all", "policy": "escalate_all", "k": 3},
+    {"name": "allow_all", "policy": "allow_all"},
+    {
+      "name": "hybrid_cost",
+      "policy": "hybrid",
+      "k": 3,
+      "allocator": "cost",
+      "reviewer_error_table": "configs/reviewer_errors.json"
+    }
+  ]
+}
