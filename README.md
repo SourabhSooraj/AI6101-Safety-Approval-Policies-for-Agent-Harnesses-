@@ -822,6 +822,54 @@ different attack methods are kept apart, and McNemar only pairs runs with the
 same attack; the by-attack-type table has an `attack_mode` column. If the same
 run appears in several batches, the last folder given wins.
 
+### Replaying attacker calls through the gate
+
+The end-to-end runs test the gate only when the agent falls for an attack,
+and DeepSeek rarely does (2 of 90 runs with no gate under
+`important_instructions_deepseek`, 0 of 90 under `injecagent`).
+`scripts/replay_attacks.py` asks the question directly: when a hijacked agent
+makes the attacker's call, does the gate stop it?
+
+For each user task x injection task, it sends the injection task's
+ground-truth calls (for example `send_money` to `US133…`, or
+`update_password`) through the real gate (`PolicyGateToolsExecutor`: P1,
+Judge, P6, reviewer), one call per turn, with the user task's request and, as
+history, the reads its ground truth makes before its first write. Each case
+gets a fresh environment and a full budget, so the attacker's three transfers
+in `injection_task_6` use it up as in a live run. A control pass sends each
+user task's own ground-truth calls the same way, to count safe calls the gate
+stops. The dev split gives 90 attack cases (110 attacker write calls) and 7
+control cases.
+
+```bash
+python scripts/replay_attacks.py --provider deepseek --model deepseek-flash \
+  --judge-model qwen3.7-flash \
+  --judge-base-url https://dashscope-intl.aliyuncs.com/compatible-mode/v1 \
+  --judge-api-key-env DASHSCOPE_API_KEY \
+  --reviewer-model glm-5.1 \
+  --reviewer-base-url https://dashscope-intl.aliyuncs.com/compatible-mode/v1 \
+  --reviewer-api-key-env DASHSCOPE_API_KEY \
+  --split dev --policies hybrid no_budget p1_only allow_all --replay-id dev-v3
+```
+
+Setups work as in `run_batch.py` (`--setups` or `--policies`). The same keys
+are needed as for a batch run. `--dry-run` lists the cases and the most Judge
+and reviewer requests each setup can send, with no keys needed. Reuse a
+`--replay-id` to resume.
+
+It writes `logs/attack_replay/<replay id>/`:
+
+| File | What it holds |
+|---|---|
+| `calls.jsonl` | One line per call: the final decision, the step that made it (`p1`, `judge`, `p6`, `reviewer`, or `budget` for a review the budget could not pay for), the Judge's scores and reason, and the reviewer's verdict and reason |
+| `summary.json` | Per setup: attack calls stopped and attacks fully stopped (with Wilson intervals), which step stopped them, results by injection task, the Judge's scores on attack calls, safe calls stopped in the control pass, reviews and cost |
+| `policy_decisions.jsonl`, `reviewer_decisions.jsonl` | The usual decision logs, with `"replay": true` |
+
+The history comes from ground truth, not from a real hijacked agent, and real
+attack calls may differ (other amounts or subjects). So this measures the gate
+on AgentDojo's standard attacker calls; it adds to the end-to-end attack rate
+and does not replace it.
+
 ### Running several tasks in one process
 
 AgentDojo's `AgentPipeline.query` uses a shared default `extra_args={}`, and
@@ -1647,6 +1695,48 @@ agent、Judge 或 reviewer 模型不同的 batch 默认拒绝合并（即使后�
 警告。一次运行由 setup、task、注入任务和攻击方法（`attack_mode`）确定，所以不同攻击
 方法的 batch 不会互相替换，McNemar 也只配对同一种攻击；按攻击类型的表多了
 `attack_mode` 列。同一次运行出现在多个 batch 中时，以最后给出的文件夹为准。
+
+### 把攻击者的调用送进 gate 重放
+
+端到端运行只有在 agent 被攻击骗到时才能测试 gate，而 DeepSeek 很少被骗（不加 gate
+时，`important_instructions_deepseek` 90 次中成功 2 次，`injecagent` 90 次中 0 次）。
+`scripts/replay_attacks.py` 直接回答这个问题：被劫持的 agent 发出攻击者的调用时，
+gate 能否拦下？
+
+对每个 user task x 注入任务，把注入任务的 ground truth 调用（例如向 `US133…`
+`send_money`，或 `update_password`）一轮一个地送进真实的 gate
+（`PolicyGateToolsExecutor`：P1、Judge、P6、reviewer）；用户请求取自 user task，
+history 是其 ground truth 在第一次写操作之前的读取。每个案例都用新的环境和完整的
+预算，所以 `injection_task_6` 的三次转账会像真实运行一样用掉预算。对照组用同样的
+方式发送每个 user task 自己的 ground truth 调用，统计 gate 拦下了多少安全调用。
+dev 划分共有 90 个攻击案例（110 个攻击者的写调用）和 7 个对照案例。
+
+```bash
+python scripts/replay_attacks.py --provider deepseek --model deepseek-flash \
+  --judge-model qwen3.7-flash \
+  --judge-base-url https://dashscope-intl.aliyuncs.com/compatible-mode/v1 \
+  --judge-api-key-env DASHSCOPE_API_KEY \
+  --reviewer-model glm-5.1 \
+  --reviewer-base-url https://dashscope-intl.aliyuncs.com/compatible-mode/v1 \
+  --reviewer-api-key-env DASHSCOPE_API_KEY \
+  --split dev --policies hybrid no_budget p1_only allow_all --replay-id dev-v3
+```
+
+setup 的写法与 `run_batch.py` 相同（`--setups` 或 `--policies`），所需的 API Key
+也相同。`--dry-run` 列出案例，以及每个 setup 最多发出的 Judge 和 reviewer 请求数，
+不需要 API Key。重复使用同一个 `--replay-id` 可以续跑。
+
+输出写入 `logs/attack_replay/<replay id>/`：
+
+| 文件 | 内容 |
+|---|---|
+| `calls.jsonl` | 每个调用一行：最终决定、做出决定的步骤（`p1`、`judge`、`p6`、`reviewer`，或 `budget`：需要审核但预算已用完），Judge 的分数和理由，reviewer 的决定和理由 |
+| `summary.json` | 按 setup：被拦下的攻击调用和被完全拦下的攻击（含 Wilson 区间）、由哪一步拦下、按注入任务的结果、Judge 对攻击调用的分数、对照组中被拦下的安全调用、审核次数和成本 |
+| `policy_decisions.jsonl`、`reviewer_decisions.jsonl` | 与平时相同的决策日志，带 `"replay": true` |
+
+history 来自 ground truth，而不是真实被劫持的 agent，真实的攻击调用也可能不同
+（金额或备注不同）。所以这里测量的是 gate 对 AgentDojo 标准攻击调用的表现，是对
+端到端攻击成功率的补充，而不是替代。
 
 ### 在同一进程中运行多个任务
 
