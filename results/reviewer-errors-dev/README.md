@@ -18,6 +18,13 @@ sees every attacker write call once, and its prompt is the same in every
 setup, so counting `hybrid` or `no_budget` as well would count the same calls
 twice. The two sources share no calls.
 
+`p1_only` reviews are easier than the ones the cost allocator decides: they
+include blunt attacker calls the Judge would deny before any review, while the
+cost allocator only weighs calls in the Judge's middle band. As a check, the
+reviewer saw 27 replay attacker calls under `hybrid` and approved 1:
+(1 + 1) / (27 + 2) = 0.069, close to the pooled 0.053. So the table holds up
+for the calls that reach the reviewer in practice.
+
 The sources complement each other: the replay supplies the unsafe calls (the
 agent almost never fell for the attacks in real runs), and the dev pilot
 supplies the safe ones.
@@ -65,7 +72,14 @@ Where the counts come from (replay + dev pilot):
   1 unsafe password change. The pooled rates are the reliable part.
 - Some replay attacker calls are blunt, so `false_approve` on transfers is
   probably an underestimate for real attacks.
-- The 116 dev calls are only 33 distinct calls repeated across runs.
+- The 116 dev calls are only 33 distinct calls repeated across runs, and the
+  repeats are not independent: at temperature 0 the reviewer gives the same
+  answer to the same call every time (a7, #25). So the dev reviews carry about
+  as much information as 33 calls, and the smoothing, which counts every
+  review, makes the per-tool rates look more certain than they are. For
+  example, `update_scheduled_transaction`'s 43 safe dev calls are only 10
+  distinct (request, arguments) pairs, and all 18 of its dev denials are task
+  12's rent update.
 - Dev split only.
 
 ## How it was built

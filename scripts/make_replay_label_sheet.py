@@ -3,7 +3,7 @@
 使用：
 
     python scripts/make_replay_label_sheet.py results/attack-replay-dev \\
-        --setups hybrid --out labels/replay_dev_hybrid.csv
+        --setups p1_only --out results/reviewer-errors-dev/replay_dev_p1_only.csv
 
 Writes the write calls the reviewer judged in an attack replay
 (scripts/replay_attacks.py) as a labels sheet for

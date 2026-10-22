@@ -8,8 +8,9 @@ ground-truth labels (scripts/make_replay_label_sheet.py) and the settled
 human labels (scripts/label_agreement.py), each with its reviewer logs:
 
     python scripts/build_reviewer_error_table.py logs/attack_replay/dev-v3 \
-        logs/agentdojo_batch/<batch_id> \
-        --labels labels/replay_dev_hybrid.csv labels/merged_labels.csv \
+        logs/agentdojo_batch/b6-dev-pilot-v3 \
+        --labels results/reviewer-errors-dev/replay_dev_p1_only.csv \
+            labels/agreement/merged_labels.csv \
         --output configs/reviewer_errors.json
 """
 
