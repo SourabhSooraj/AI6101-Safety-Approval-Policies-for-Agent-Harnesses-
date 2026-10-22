@@ -1,0 +1,9 @@
+{
+  "setups": [
+    {"name": "hybrid_th070", "policy": "hybrid", "k": 3, "t_low": 0.3, "t_high": 0.7},
+    {"name": "hybrid_th085", "policy": "hybrid", "k": 3, "t_low": 0.3, "t_high": 0.85},
+    {"name": "hybrid_th095", "policy": "hybrid", "k": 3, "t_low": 0.3, "t_high": 0.95},
+    {"name": "hybrid_th100", "policy": "hybrid", "k": 3, "t_low": 0.3, "t_high": 1.0},
+    {"name": "allow_all", "policy": "allow_all"}
+  ]
+}

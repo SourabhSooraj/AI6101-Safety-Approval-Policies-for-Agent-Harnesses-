@@ -68,6 +68,12 @@ class PolicyResult:
     judge_disagreement: bool | None = None
     # Judge 请求或解析失败时的错误信息（如 HTTP 401/404），便于排查 fail-closed。
     judge_error: str | None = None
+    # Judge 的理由（第一个样本）、每个样本的分数，以及所用 prompt 的版本。
+    # The Judge's reason (first sample), each sample's score, and the prompt
+    # version it used.
+    judge_reason: str | None = None
+    judge_scores: tuple[float, ...] | None = None
+    judge_prompt_version: str | None = None
     model_name: str = ""
     input_tokens: int = 0
     output_tokens: int = 0

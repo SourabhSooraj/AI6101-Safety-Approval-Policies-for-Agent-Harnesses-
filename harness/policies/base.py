@@ -1,7 +1,7 @@
 from dataclasses import replace
 from typing import Protocol
 
-from ..llm_judge import JudgeResult
+from ..llm_judge import JUDGE_PROMPT_VERSION, JudgeResult
 from ..policy import PolicyRequest, PolicyResult
 
 
@@ -27,6 +27,9 @@ def attach_judge_metadata(
         judge_success=judge_result.success,
         judge_disagreement=judge_result.disagreement,
         judge_error=judge_result.error,
+        judge_reason=judge_result.reason,
+        judge_scores=tuple(sample.risk_score for sample in judge_result.samples),
+        judge_prompt_version=JUDGE_PROMPT_VERSION,
         model_name=usage.model if usage is not None else fallback_model,
         input_tokens=usage.input_tokens if usage is not None else 0,
         output_tokens=usage.output_tokens if usage is not None else 0,
