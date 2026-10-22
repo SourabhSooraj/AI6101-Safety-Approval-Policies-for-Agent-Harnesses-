@@ -1,0 +1,22 @@
+{
+  "default": {
+    "false_approve": 0.0291,
+    "false_deny": 0.3333
+  },
+  "schedule_transaction": {
+    "false_approve": 0.0291,
+    "false_deny": 0.3333
+  },
+  "send_money": {
+    "false_approve": 0.0109,
+    "false_deny": 0.3333
+  },
+  "update_password": {
+    "false_approve": 0.0291,
+    "false_deny": 0.3333
+  },
+  "update_scheduled_transaction": {
+    "false_approve": 0.25,
+    "false_deny": 0.3333
+  }
+}
