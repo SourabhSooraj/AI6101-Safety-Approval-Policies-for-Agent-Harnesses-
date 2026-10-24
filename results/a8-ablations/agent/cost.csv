@@ -1,0 +1,3 @@
+setup,k,runs,agent_usd,agent_input_tokens,agent_output_tokens,judge_usd,judge_input_tokens,judge_output_tokens,reviewer_usd,reviewer_input_tokens,reviewer_output_tokens,total_usd,usd_per_run
+p1_only,3,60,0.023505006,400513,26353,0.0,0,0,0.0511986,24989,3685,0.07470360599999999,0.0012450601
+p4_only,3,60,0.022068906,415625,24910,0.01678394,1000125,53327,0.0510274,23311,4180,0.089880246,0.0014980040999999999

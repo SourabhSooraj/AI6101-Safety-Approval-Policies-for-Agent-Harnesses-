@@ -1,0 +1,62 @@
+{
+  "replay_id": "a8-replay",
+  "commit": "f2a3054070421abd3ddddc1ec08d1af1bd686a57",
+  "benchmark_version": "v1.2.2",
+  "suite": "banking",
+  "judge_model": "qwen3.7-flash",
+  "judge_base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+  "judge_temperature": 0.0,
+  "reviewer_model": "glm-5.1",
+  "reviewer_base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+  "setups": [
+    {
+      "name": "hybrid",
+      "policy": "hybrid",
+      "options": {
+        "k": 3
+      }
+    },
+    {
+      "name": "p1_only",
+      "policy": "p1_only",
+      "options": {
+        "k": 3
+      }
+    },
+    {
+      "name": "p4_only",
+      "policy": "p4_only",
+      "options": {
+        "k": 3
+      }
+    },
+    {
+      "name": "hybrid_band_off",
+      "policy": "hybrid",
+      "options": {
+        "k": 3,
+        "t_low": 0.0,
+        "t_high": 1.0
+      }
+    }
+  ],
+  "task_ids": [
+    "user_task_0",
+    "user_task_3",
+    "user_task_4",
+    "user_task_7",
+    "user_task_13",
+    "user_task_15"
+  ],
+  "injection_task_ids": [
+    "injection_task_0",
+    "injection_task_1",
+    "injection_task_2",
+    "injection_task_3",
+    "injection_task_4",
+    "injection_task_5",
+    "injection_task_6",
+    "injection_task_7",
+    "injection_task_8"
+  ]
+}
